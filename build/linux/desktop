@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Nurvis
+Comment=Nurvis desktop application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/nurvis %u
+Terminal=false
+Type=Application
+Icon=nurvis
+Categories=Utility;
+StartupWMClass=nurvis
+
+ 

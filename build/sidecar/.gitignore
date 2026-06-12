@@ -1,0 +1,4 @@
+# Ollama sidecar binaries are downloaded at build time by fetch-ollama.sh.
+# They are large and platform-specific — never commit them.
+*
+!.gitignore

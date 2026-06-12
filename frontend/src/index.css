@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface-primary: oklch(0.17 0 0);
+  --color-surface-secondary: oklch(0.21 0 0);
+  --color-surface-tertiary: oklch(0.27 0 0);
+  --color-sidebar: oklch(0.185 0 0);
+  --color-text-primary: oklch(0.95 0 0);
+  --color-text-secondary: oklch(0.78 0 0);
+  --color-text-muted: oklch(0.62 0 0);
+  --color-accent: oklch(0.68 0.18 38);
+  --color-accent-hover: oklch(0.72 0.18 38);
+  --color-border: oklch(0.28 0 0);
+  --color-user-bubble: oklch(0.50 0.17 38);
+  --color-agent-bubble: oklch(0.23 0 0);
+  --color-success: oklch(0.45 0.15 145);
+  --color-warning: oklch(0.65 0.15 75);
+  --color-error: oklch(0.65 0.23 25);
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.375rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.5rem;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.30), 0 2px 4px oklch(0 0 0 / 0.24);
+  --shadow-md: 0 2px 4px oklch(0 0 0 / 0.30), 0 4px 10px oklch(0 0 0 / 0.32);
+  --shadow-lg: 0 4px 10px oklch(0 0 0 / 0.34), 0 10px 24px oklch(0 0 0 / 0.40);
+  --shadow-xl: 0 8px 18px oklch(0 0 0 / 0.40), 0 18px 44px oklch(0 0 0 / 0.52);
+  --shadow-focus: 0 0 0 3px oklch(0.68 0.18 38 / 0.30);
+}
+
+:root:not(.dark) {
+  --color-surface-primary: oklch(0.97 0.005 80);
+  --color-surface-secondary: oklch(1 0 0);
+  --color-surface-tertiary: oklch(0.94 0.01 80);
+  --color-sidebar: oklch(0.985 0.004 80);
+  --color-text-primary: oklch(0.17 0.02 55);
+  --color-text-secondary: oklch(0.35 0.02 50);
+  --color-text-muted: oklch(0.45 0.02 50);
+  --color-accent: oklch(0.62 0.19 38);
+  --color-accent-hover: oklch(0.58 0.19 38);
+  --color-border: oklch(0.90 0.01 70);
+  --color-user-bubble: oklch(0.40 0.14 38);
+  --color-agent-bubble: oklch(0.94 0.01 80);
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  height: 100dvh;
+}
+
+#root {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-dots {
+  background-image: radial-gradient(circle, oklch(0.27 0 0) 0.5px, transparent 0.5px);
+  background-size: 32px 32px;
+}
+:root:not(.dark) .canvas-dots {
+  background-image: radial-gradient(circle, oklch(0.90 0.005 70) 0.5px, transparent 0.5px);
+}
+
+.app-bg {
+  background-color: oklch(0.14 0.03 280);
+  background-image:
+    radial-gradient(900px circle at 18% 12%, oklch(0.55 0.22 285 / 0.5), transparent 55%),
+    radial-gradient(1000px circle at 86% 6%, oklch(0.52 0.2 255 / 0.42), transparent 55%),
+    radial-gradient(1100px circle at 50% 110%, oklch(0.44 0.18 300 / 0.38), transparent 60%);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: var(--color-surface-tertiary) transparent;
+}
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 2px; }
+*:hover::-webkit-scrollbar-thumb { background: var(--color-surface-tertiary); }
+
+::selection { background: var(--color-accent); color: white; }
+
+button, a, [role="button"] { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-fade-in { animation: fade-in 0.5s ease-out both; }
+.animate-slide-up { animation: slide-up 0.4s ease-out both; }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
+
+.skeleton {
+  background: linear-gradient(90deg,
+    var(--color-surface-tertiary) 25%,
+    oklch(0.32 0 0) 50%,
+    var(--color-surface-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* Progress bar gradient */
+.progress-gradient {
+  background: linear-gradient(90deg,
+    oklch(0.68 0.18 38),
+    oklch(0.72 0.2 50),
+    oklch(0.68 0.22 280)
+  );
+}
+
+/* Progress bar striped animation */
+@keyframes progress-stripes {
+  from { background-position: 0 0; }
+  to   { background-position: 1rem 0; }
+}
+
+/* Indeterminate progress shimmer */
+@keyframes progress-indeterminate {
+  0%   { left: -35%; }
+  60%  { left: 100%; }
+  100% { left: 100%; }
+}
