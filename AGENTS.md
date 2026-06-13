@@ -1,6 +1,6 @@
 # Nurvis — 本地优先的多 Agent 运行时
 
-> 一个类 OpenClaw 的本地优先 Agent 平台。核心通过 [yzma](https://github.com/hybridgroup/yzma) 在进程内直接调用 `llama.cpp` 进行本地推理，**数据不离电脑**；同时支持用户创建多个 Agent，为不同任务（编程 / 画图 / 设计等）绑定不同模型、工具、工作区与对话渠道。
+> 一个本地优先 Agent 平台。通过在进程内直接调用 `llama.cpp` 进行本地推理，**数据不离电脑**；同时支持用户创建多个 Agent，为不同任务（编程 / 画图 / 设计等）绑定不同模型、工具、工作区与对话渠道。
 
 ---
 
@@ -38,7 +38,7 @@
 | MCP | 官方 `mcp-go` SDK（stdio / SSE / Streamable HTTP） | 工具扩展 |
 | 调度 | `robfig/cron/v3` | 定时任务 |
 | 渠道 | 微信、QQ（先接入） | 见 §10 |
-| 桌面（二阶段） | Wails3 | 复用 Gateway 协议 |
+| 桌面 | Wails3 | 复用 Gateway 协议 |
 
 ---
 
@@ -114,41 +114,97 @@ nurvis/
 │       ├── main.go
 │       └── app.go
 ├── internal/
-│   ├── app/app.go                 # 依赖装配 (wiring)、生命周期
+│   ├── app/
+│   │   ├── app.go                 # 依赖装配 (wiring)、生命周期
+│   │   ├── channel.go             # Channel 实例构建
+│   │   ├── cron.go                # Scheduler 构建
+│   │   └── model_meta_adapter.go  # ModelMeta 适配器
 │   ├── gateway/
 │   │   ├── server.go              # WS server
 │   │   ├── methods.go             # JSON-RPC 方法路由
+│   │   ├── methods_agents.go      # Agent 相关方法
+│   │   ├── methods_channels.go    # Channel 相关方法
+│   │   ├── methods_chat.go        # Chat 对话方法
+│   │   ├── methods_credentials.go # 凭证管理方法
+│   │   ├── methods_cron.go        # 定时任务方法
+│   │   ├── methods_mcp.go         # MCP 管理方法
+│   │   ├── methods_models.go      # 模型管理方法
+│   │   ├── methods_projects.go    # 项目管理方法
+│   │   ├── methods_runtime.go     # 运行时状态方法
+│   │   ├── methods_setting.go     # 设置方法
+│   │   ├── methods_skills.go      # Skill 管理方法
+│   │   ├── methods_tools.go       # 工具方法
+│   │   ├── nethods_sessions.go    # Session 方法（typo preserved）
 │   │   └── middleware.go          # 鉴权等中间件
 │   ├── agent/
 │   │   ├── manager.go             # Agent CRUD、实例缓存
 │   │   ├── loop.go                # 8 阶段编排
-│   │   └── stages/                # context/history/prompt/think/act/observe/memory/summarize
+│   │   ├── loop_media.go          # 多模态 Loop（to-image/to-video）
+│   │   ├── loop_test.go           # Loop 测试
+│   │   ├── stage.go               # Stage 接口
+│   │   ├── stage_act.go           # act 阶段
+│   │   ├── stage_check.go         # check 阶段
+│   │   ├── stage_context.go       # context 阶段
+│   │   ├── stage_finalize.go      # finalize 阶段
+│   │   ├── stage_history.go       # history 阶段
+│   │   ├── stage_prepare.go       # prepare 阶段
+│   │   ├── stage_prompt.go        # prompt 阶段
+│   │   ├── stage_prune.go         # prune 裁剪阶段
+│   │   ├── stage_think.go         # think 阶段
+│   │   ├── prompt.go              # 系统提示组装
+│   │   ├── attachments.go         # 附件处理
+│   │   ├── message_buffer.go      # 消息缓冲
+│   │   ├── tag.go                 # Agent tag（to-text/to-image/to-video）
+│   │   └── tokencount.go          # Token 计数
 │   ├── provider/
 │   │   ├── provider.go            # Provider 接口
-│   │   ├── yzma.go                # 本地 yzma Provider 实现（默认）
-│   │   ├── openai.go              # OpenAI 兼容实现（远程模型可选）
-│   │   └── yzma_test.go
-│   ├── llamax/                    # yzma Runtime 封装（进程内单例）
-│   │   ├── runtime.go             # llama.Load / Init / Close 全局生命周期
-│   │   ├── engine.go              # Engine: 模型加载 + 流式 Chat 生成
-│   │   ├── sampler.go             # 采样参数转换
-│   │   ├── template.go            # Chat template 渲染（gemma/qwen/chatml...）
-│   │   └── tools.go               # 工具调用解析（封装 yzma message.ParseToolCalls）
-│   ├── modelmgr/                  # 本地 GGUF 模型管理（替代 ollama 进程管理）
+│   │   ├── llama.go               # 本地 llama.cpp Provider 实现（默认）
+│   │   └── openai.go              # OpenAI 兼容实现（远程模型可选）
+│   ├── backends/                  # 推理后端封装
+│   │   ├── llamax/                # llama.cpp Runtime（进程内单例）
+│   │   │   ├── runtime.go         # llama.Load / Init / Close 全局生命周期
+│   │   │   ├── engine.go          # Engine: 模型加载 + 流式 Chat 生成
+│   │   │   ├── engine_test.go     # Engine 测试
+│   │   │   ├── install.go         # 首次启动自动下载 llama.cpp 动态库
+│   │   │   ├── platform_unix.go   # Unix 平台适配
+│   │   │   └── platform_windows.go # Windows 平台适配
+│   │   └── gosd/                  # Go Stable Diffusion Runtime（图像生成）
+│   │       ├── runtime.go         # sd-server 生命周期管理
+│   │       ├── engine.go          # Engine: sd 推理 + API 调用
+│   │       ├── install.go         # 首次启动自动下载 sd-server
+│   │       └── types.go           # GoSD 类型定义
+│   ├── modelmgr/                  # 本地 GGUF 模型管理
 │   │   ├── manager.go             # 扫本地模型目录 / 删除 / 元数据
-│   │   ├── download.go            # HuggingFace GGUF 下载（断点续传 + 进度）
+│   │   ├── pull.go                # HuggingFace GGUF 下载（断点续传 + 进度）
 │   │   ├── library.go             # HuggingFace 推荐模型清单（默认精选 + 可扩展）
-│   │   └── llamacpp.go            # 首次启动自动 yzma download.LlamaInstall 到 ~/.nurvis/lib
-│   ├── hardware/hardware.go       # 内存/GPU 探测 + 模型推荐
-│   ├── tool/
+│   │   └── hf_detail.go           # HuggingFace 模型详情解析
+│   ├── hardware/
+│   │   ├── hardware.go            # 内存/GPU 探测 + 模型推荐
+│   │   └── hardware_test.go       # 硬件探测测试
+│   ├── tools/                     # 内置工具 + Tool Registry
 │   │   ├── tool.go                # Tool 接口 + Registry
-│   │   └── builtin/               # 内置工具
-│   │       ├── register.go
-│   │       ├── exec.go            # 命令执行
-│   │       ├── fs.go              # 文件读写
-│   │       └── http.go            # HTTP 请求
+│   │   ├── register.go            # 工具注册
+│   │   ├── exec.go                # 命令执行
+│   │   ├── fs.go                  # 文件读写
+│   │   ├── http.go                # HTTP 请求
+│   │   ├── edit_file.go           # 文件编辑
+│   │   ├── grep.go                # 内容搜索
+│   │   ├── glob.go                # 文件模式匹配
+│   │   ├── web_preview.go         # Web 预览
+│   │   ├── channel.go             # Channel 工具
+│   │   ├── cron.go                # Cron 工具
+│   │   ├── skill.go               # Skill 工具
+│   │   ├── cf_pages_upload.go     # Cloudflare Pages 上传
+│   │   ├── publish_cf_pages.go    # Cloudflare Pages 发布
+│   │   └── new_tools_test.go      # 新工具测试
 │   ├── mcp/manager.go             # MCP Manager（client 连接、工具注册到 Registry）
-│   ├── skill/manager.go           # Skill Manager（加载、授权、转 Tool）
+│   ├── skill/
+│   │   ├── manager.go             # Skill Manager（加载、授权、转 Tool）
+│   │   ├── parser.go              # Skill manifest 解析
+│   │   └── parser_test.go         # 解析测试
+│   ├── preview/
+│   │   ├── handler.go             # 预览 HTTP handler
+│   │   └── registry.go            # 预览注册表
 │   ├── workspace/workspace.go     # Workspace/Project 管理（本地目录）
 │   ├── memory/store.go            # 会话历史 + 长期记忆
 │   ├── bus/
@@ -159,10 +215,12 @@ nurvis/
 │   │   ├── channel.go             # Channel 接口
 │   │   ├── dispatcher.go          # 入站调度（去重/防抖/路由）
 │   │   ├── wechat/channel.go      # 微信 Channel 实现
-│   │   └── qq/channel.go          # QQ Channel 实现
+│   │   └── qq/
+│   │       ├── channel.go         # QQ Channel 实现
+│   │       └── media.go           # QQ 媒体处理
 │   ├── store/
 │   │   ├── store.go               # SQLite 封装
-│   │   ├── migrations/             # *.sql schema 迁移
+│   │   ├── migrations/            # *.sql schema 迁移
 │   │   └── repo/                  # 各实体 Repository（DAO）
 │   │       ├── repo.go
 │   │       ├── agent.go
@@ -172,8 +230,11 @@ nurvis/
 │   │       ├── mcp.go
 │   │       ├── memory.go
 │   │       ├── message.go
+│   │       ├── model.go
 │   │       ├── project.go
 │   │       ├── session.go
+│   │       ├── settings.go
+│   │       ├── site_credential.go
 │   │       └── skill.go
 │   └── version/version.go         # 版本信息
 ├── frontend/
@@ -190,36 +251,56 @@ nurvis/
 │       ├── index.css              # Tailwind + OKLCH 设计体系
 │       ├── lib/
 │       │   ├── ws.ts              # WebSocket JSON-RPC 客户端
-│       │   └── constants.ts       # WS_URL / API_BASE
+│       │   ├── constants.ts       # WS_URL / API_BASE
+│       │   └── tool-labels.ts     # 工具标签映射
 │       ├── types/
 │       │   ├── index.ts           # Agent / Session / Message 等类型
 │       │   └── wails-bindings.d.ts
 │       ├── stores/
 │       │   ├── ui-store.ts        # theme / view / activeAgentId
-│       │   └── chat-store.ts      # messages / isRunning / 流式状态
+│       │   ├── chat-store.ts      # messages / isRunning / 流式状态
+│       │   └── model-store.ts     # 模型列表 / 推荐 / 拉取状态
 │       ├── hooks/
-│       │   ├── use-agents.ts
-│       │   ├── use-sessions.ts
+│       │   ├── use-agents.ts      # agents CRUD
+│       │   ├── use-sessions.ts    # sessions CRUD
 │       │   ├── use-chat.ts        # WS 事件订阅 + sendMessage + abort
-│       │   └── use-runtime.ts     # 硬件 / runtime 状态 / 模型推荐
+│       │   ├── use-runtime.ts     # runtime 状态
+│       │   ├── use-model.ts       # 模型操作
+│       │   ├── use-model-capabilities.ts # 模型能力查询
+│       │   └── use-projects.ts    # 项目 CRUD
 │       ├── services/              # API 服务封装
 │       └── components/
 │           ├── ui/index.tsx       # Button / Input / Textarea / Spinner
 │           ├── common/            # 通用业务组件
 │           ├── onboarding/
-│           │   ├── OnboardingWizard.tsx
-│           │   ├── SetupStep.tsx
-│           │   └── AgentCreateStep.tsx
+│           │   ├── OnboardingWizard.tsx  # 两步引导
+│           │   ├── SetupStep.tsx         # 硬件探测 + 库下载 + 模型拉取
+│           │   ├── AgentCreateStep.tsx   # 预设角色选择 + 创建 Agent
+│           │   └── ModelSearchDialog.tsx # 模型搜索弹窗
 │           ├── agents/
-│           │   ├── AgentPanel.tsx
-│           │   └── AgentFormDialog.tsx
+│           │   ├── AgentPanel.tsx        # Agent 列表 + 增删改
+│           │   ├── AgentFormDialog.tsx   # Emoji/名称/模型/系统提示词表单
+│           │   └── AgentTagBadge.tsx     # Agent 标签徽章（to-text/to-image/to-video）
 │           ├── chat/
-│           │   ├── ChatCanvas.tsx
-│           │   ├── MessageBubble.tsx
-│           │   └── InputBar.tsx
+│           │   ├── ChatCanvas.tsx        # 消息区 + dots 背景 + 空状态
+│           │   ├── MessageBubble.tsx     # 用户/Assistant/Tool 气泡 + Markdown
+│           │   └── InputBar.tsx          # 自增高 textarea + 发送/停止按钮
+│           ├── settings/
+│           │   ├── SettingsPanel.tsx      # 设置面板主容器
+│           │   ├── AgentsTab.tsx         # Agent 管理标签页
+│           │   ├── ModelsTab.tsx         # 模型管理标签页
+│           │   ├── ChannelsTab.tsx       # Channel 管理标签页
+│           │   ├── McpTab.tsx            # MCP 服务器管理标签页
+│           │   ├── SkillsTab.tsx         # Skill 管理标签页
+│           │   ├── CronTab.tsx           # 定时任务标签页
+│           │   ├── ProjectsTab.tsx       # 项目管理标签页
+│           │   ├── CredentialsTab.tsx    # 凭证管理标签页
+│           │   ├── AppearanceTab.tsx     # 外观设置标签页
+│           │   ├── shared-ui.tsx         # 共享 UI 组件
+│           │   └── types.ts             # 设置相关类型
 │           └── layout/
-│               ├── AppShell.tsx
-│               └── Sidebar.tsx
+│               ├── AppShell.tsx          # 侧边栏 + 主内容区
+│               └── Sidebar.tsx           # Nav / Agent 列表 / Session 历史
 ├── go.mod
 ├── Makefile
 ├── Taskfile.yml
@@ -402,81 +483,7 @@ type RunState struct {
 
 ---
 
-## 7. 本地推理（yzma + llama.cpp） + 硬件探测 + 模型管理
-
-### 7.1 yzma Runtime（`internal/llamax`）
-
-进程内单例，负责 `llama.cpp` 动态库的加载与全局生命周期。**不需要任何外部进程**。
-
-```go
-type Runtime interface {
-    EnsureReady(ctx context.Context) error // 首启自动下载 llama.cpp 库 + llama.Load + llama.Init
-    LibPath() string                       // 当前使用的 lib 目录
-    Close() error                          // 进程退出时调用 llama.Close
-    LoadModel(path string, opts ModelOptions) (*Engine, error) // 加载一个 GGUF 模型
-}
-
-type Engine interface {
-    Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.Chunk, error)
-    Close() error
-}
-```
-
-- 默认 lib 目录：`~/.nurvis/lib`（可被 `NURVIS_LIB` 覆盖）。
-- `EnsureReady` 流程：
-  1. 检测 `LibPath()` 下是否已有 `llama.cpp` 库；
-  2. 若没有，调用 yzma 的 `pkg/download` 自动下载与本机 OS/Arch/GPU 匹配的预编译动态库（macOS arm64 → Metal；Linux/Win → CUDA / Vulkan / CPU 自动挑选），过程经 bus 推 `runtime.lib.progress`；
-  3. `llama.Load(libPath)` + `llama.Init()`；进程退出统一 `llama.Close`。
-- `Engine` 内部维护单模型上下文 `(model, ctx, sampler, vocab)`；`Chat` 内做：
-  - 用模型自带 chat template（`llama.ModelChatTemplate`）渲染 `messages`；若模型未携带，回退 `chatml`；
-  - `Tokenize → BatchGetOne → Decode → SamplerSample → TokenToPiece` 循环逐 token 输出，并把每个 piece 作为 `Chunk{Content: piece}` 发送到返回通道；
-  - 命中 `VocabIsEOG` 或 `ctx.Err()` 退出循环，最后一次发送 `Chunk{Done: true, ToolCalls: <解析结果>}`。
-- 模型缓存策略：Engine 按 `(model_path, ctx_size)` 缓存；同一模型并发会话串行使用同一 `llama.Context`（以 token 队列的方式串行），避免重复加载。模型切换 = 释放旧 Engine + 加载新 Engine。
-
-### 7.2 yzma Provider（`internal/provider/yzma.go`）
-
-`Provider` 的默认实现，核心职责：
-
-```go
-type YzmaProvider struct {
-    rt   llamax.Runtime
-    mgr  modelmgr.Manager
-    pool *enginePool // 已加载的 Engine 缓存
-}
-
-func (p *YzmaProvider) Chat(ctx context.Context, req ChatRequest) (<-chan Chunk, error) {
-    eng, err := p.pool.GetOrLoad(ctx, req.Model)
-    if err != nil { return nil, err }
-    return eng.Chat(ctx, req)
-}
-```
-
-- `req.Model` 取值规则：本地 GGUF 文件名（如 `gemma-3-4b-it-Q4_K_M.gguf`）或 HF 风格路径（如 `ggml-org/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf`）；`ModelManager` 负责解析为本地绝对路径。
-- `Embed` 在本地实现中返回 `ErrNotImplemented`（一阶段 memory 不依赖向量）。
-
-### 7.3 Tool calling 解析（`internal/llamax/tools.go`）
-
-llama.cpp 直接输出 token 文本，没有结构化 `tool_calls` 字段。Nurvis 直接复用 yzma 的多格式解析器：
-
-```go
-import "github.com/hybridgroup/yzma/pkg/message"
-
-func ParseToolCalls(full string) []provider.ToolCall {
-    raw := message.ParseToolCalls(full) // 自动识别 Standard / Qwen / GLM / Mistral / Gemma / GPT / Phi-4 / inline-JSON
-    // ... 转成 provider.ToolCall
-}
-```
-
-支持的格式覆盖（来自 yzma `pkg/message/parser.go`）：
-- **Standard**：`<tool_call>{...}</tool_call>` 包裹（Qwen、Llama-3.x 工具微调版常见）
-- **Qwen**：`<function=name>...</function>` 块（含散落在文本中的多块）
-- **Gemma**：内联裸 JSON `{"name":"...","args":{...}}`
-- **GLM / Mistral / GPT / Phi-4**：各自的封装格式
-- 健壮性：`repairJSON` 自动补全截断的大括号 / 中括号
-
-> 一阶段先以 Gemma、Qwen 两族为主验证；其它格式得益于 yzma 的统一解析器，可以零额外代码支持。
-
-### 7.4 ModelManager（`internal/modelmgr`）
+## 7 ModelManager（`internal/modelmgr`）
 
 不再托管任何外部进程，只做**本地 GGUF 文件管理**：
 
@@ -503,7 +510,7 @@ type ModelRef struct {
 - 本地存在时 `Pull` 直接走 “already present” 短路。
 - 推荐库（`ListLibrary`）：一阶段使用内置精选 JSON（gemma3 / qwen2.5 / llama3.2 / phi-3.5 等几十条），后续可改为查 HuggingFace search API。
 
-### 7.5 硬件探测与模型推荐
+### 7.1 硬件探测与模型推荐
 
 ```go
 type HardwareInfo struct {
@@ -608,7 +615,7 @@ sequenceDiagram
 { "type":"event", "event":"agent.chunk", "payload":{"content":"..."} }
 ```
 
-### 一阶段方法清单
+### 方法清单
 
 | 分组 | 方法 |
 |------|------|
@@ -631,275 +638,16 @@ sequenceDiagram
 
 ---
 
-## 13. SQLite 表设计
+## 13. 前端
 
-约定：所有表用 `TEXT` 存 UUID 主键，时间用 `INTEGER`（Unix 毫秒），可扩展字段统一用 `config_json TEXT`。开启 `PRAGMA journal_mode=WAL; foreign_keys=ON;`。
-
-```sql
--- 13.1 schema 版本
-CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER);
-
--- 13.2 全局/系统配置（KV）
-CREATE TABLE settings (
-    key        TEXT PRIMARY KEY,
-    value_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-
--- 13.3 项目 / 工作区
-CREATE TABLE projects (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    dir         TEXT NOT NULL,          -- 本地绝对路径（工作区）
-    description TEXT,
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-);
-
--- 13.4 Provider（一阶段默认 yzma 本地，预留多 provider）
-CREATE TABLE providers (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    kind        TEXT NOT NULL,          -- yzma | openai_compatible
-    base_url    TEXT,                   -- yzma 本地为空；openai 兼容时填 endpoint
-    config_json TEXT,                   -- 鉴权等
-    created_at  INTEGER NOT NULL
-);
-
--- 13.5 模型（本地已下载/可用模型缓存）
-CREATE TABLE models (
-    id           TEXT PRIMARY KEY,
-    provider_id  TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    name         TEXT NOT NULL,         -- 显示名，如 gemma-3-4b-it-Q4_K_M
-    repo         TEXT,                  -- HF repo, e.g. ggml-org/gemma-3-4b-it-GGUF
-    file         TEXT,                  -- gguf 文件名
-    local_path   TEXT,                  -- 已下载的绝对路径
-    size_bytes   INTEGER,
-    context_len  INTEGER,
-    capabilities TEXT,                  -- chat,vision,tools (逗号分隔)
-    pulled       INTEGER DEFAULT 0,     -- 是否已下载
-    created_at   INTEGER NOT NULL,
-    UNIQUE(provider_id, name)
-);
-
--- 13.6 Agent
-CREATE TABLE agents (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    role            TEXT,               -- 编程 / 画图 / 设计...
-    system_prompt   TEXT,
-    provider_id     TEXT REFERENCES providers(id),
-    model           TEXT NOT NULL,      -- 绑定模型（to-text 用 GGUF；to-image/to-video 用扩散模型）
-    default_project TEXT REFERENCES projects(id), -- 默认工作区
-    options_json    TEXT,               -- temperature/num_ctx 等
-    max_rounds      INTEGER DEFAULT 16, -- think/act 最大循环
-    enabled         INTEGER DEFAULT 1,
-    tag             TEXT NOT NULL DEFAULT 'to-text', -- to-text | to-image | to-video
-    chat_model      TEXT,               -- to-image/to-video 必填的对话模型，to-text 不使用
-    created_at      INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL
-);
-
--- 13.7 Agent ↔ 工具白名单（内置/mcp/skill 统一用 tool_ref）
-CREATE TABLE agent_tools (
-    agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    tool_ref  TEXT NOT NULL,            -- builtin:exec | mcp:<server>:<tool> | skill:<id>
-    enabled   INTEGER DEFAULT 1,
-    PRIMARY KEY (agent_id, tool_ref)
-);
-
--- 13.8 内置工具开关
-CREATE TABLE builtin_tools (
-    name        TEXT PRIMARY KEY,       -- exec / read_file ...
-    enabled     INTEGER DEFAULT 1,
-    config_json TEXT
-);
-
--- 13.9 MCP 服务器
-CREATE TABLE mcp_servers (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    transport   TEXT NOT NULL,          -- stdio | sse | http
-    command     TEXT,                   -- stdio 启动命令
-    args_json   TEXT,
-    url         TEXT,                   -- sse/http 地址
-    env_json    TEXT,
-    enabled     INTEGER DEFAULT 1,
-    created_at  INTEGER NOT NULL
-);
-
--- 13.10 MCP 工具 ↔ Agent 授权
-CREATE TABLE mcp_grants (
-    server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
-    agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    PRIMARY KEY (server_id, agent_id)
-);
-
--- 13.11 Skill
-CREATE TABLE skills (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    version     TEXT,
-    path        TEXT NOT NULL,          -- skill 包目录
-    manifest_json TEXT,
-    enabled     INTEGER DEFAULT 1,
-    created_at  INTEGER NOT NULL
-);
-
-CREATE TABLE skill_grants (
-    skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    PRIMARY KEY (skill_id, agent_id)
-);
-
--- 13.12 会话
-CREATE TABLE sessions (
-    id          TEXT PRIMARY KEY,
-    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    project_id  TEXT REFERENCES projects(id),  -- 本会话使用的工作区（可覆盖 agent 默认）
-    label       TEXT,
-    channel     TEXT,                  -- desktop | wechat | qq | cron
-    summary     TEXT,                  -- 滚动摘要（summarize 阶段维护）
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-);
-
--- 13.13 消息（会话历史）
-CREATE TABLE messages (
-    id          TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    role        TEXT NOT NULL,         -- system|user|assistant|tool
-    content     TEXT,
-    tool_calls_json TEXT,              -- assistant 发起的工具调用
-    tool_name   TEXT,                  -- role=tool 时所属工具
-    media_json  TEXT,                  -- 附件/产物
-    tokens      INTEGER,
-    created_at  INTEGER NOT NULL
-);
-CREATE INDEX idx_messages_session ON messages(session_id, created_at);
-
--- 13.14 长期记忆
-CREATE TABLE memories (
-    id          TEXT PRIMARY KEY,
-    agent_id    TEXT REFERENCES agents(id) ON DELETE CASCADE,
-    scope       TEXT NOT NULL,         -- global | agent | session
-    session_id  TEXT,
-    kind        TEXT,                  -- preference | fact | feedback
-    content     TEXT NOT NULL,
-    embedding   BLOB,                  -- 预留，一阶段不写入
-    created_at  INTEGER NOT NULL
-);
-
--- 13.15 Channel 实例
-CREATE TABLE channels (
-    id          TEXT PRIMARY KEY,
-    type        TEXT NOT NULL,         -- wechat | qq
-    name        TEXT NOT NULL,
-    config_json TEXT,                  -- 网关地址、账号、token
-    agent_id    TEXT REFERENCES agents(id), -- 默认绑定的 agent
-    enabled     INTEGER DEFAULT 1,
-    created_at  INTEGER NOT NULL
-);
-
--- 13.16 Channel 路由（发信人 → agent/session 映射）
-CREATE TABLE channel_routes (
-    id          TEXT PRIMARY KEY,
-    channel_id  TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-    peer        TEXT NOT NULL,         -- 用户/群 标识
-    agent_id    TEXT REFERENCES agents(id),
-    session_id  TEXT REFERENCES sessions(id),
-    UNIQUE(channel_id, peer)
-);
-
--- 13.17 定时任务
-CREATE TABLE cron_jobs (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    spec        TEXT NOT NULL,         -- cron 表达式
-    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    project_id  TEXT REFERENCES projects(id),
-    prompt      TEXT NOT NULL,         -- 触发时的初始消息
-    enabled     INTEGER DEFAULT 1,
-    created_at  INTEGER NOT NULL
-);
-
--- 13.18 定时任务运行记录
-CREATE TABLE cron_runs (
-    id          TEXT PRIMARY KEY,
-    job_id      TEXT NOT NULL REFERENCES cron_jobs(id) ON DELETE CASCADE,
-    session_id  TEXT,
-    status      TEXT,                  -- running | ok | failed
-    error       TEXT,
-    started_at  INTEGER NOT NULL,
-    finished_at INTEGER
-);
-```
-
-ER 关系概览：
-
-```mermaid
-erDiagram
-    projects ||--o{ sessions : "工作区"
-    agents ||--o{ sessions : "拥有"
-    agents ||--o{ agent_tools : "白名单"
-    agents }o--|| providers : "用"
-    sessions ||--o{ messages : "历史"
-    agents ||--o{ memories : "记忆"
-    mcp_servers ||--o{ mcp_grants : "授权"
-    skills ||--o{ skill_grants : "授权"
-    channels ||--o{ channel_routes : "路由"
-    cron_jobs ||--o{ cron_runs : "运行"
-```
-
----
-
-## 14. 二阶段：前端
-
-### 14.1 技术栈
+### 13.1 技术栈
 
 - **React 19 + Vite + TypeScript + Tailwind CSS v4**，零 CGO，纯 Web 技术。
 - 状态管理：**Zustand**（`ui-store` / `chat-store`）。
 - 通信：复用 Gateway WebSocket JSON-RPC（`frontend/src/lib/ws.ts`）。
 - 表单：`react-hook-form + zod`；Markdown 渲染：`react-markdown + remark-gfm`。
 
-### 14.2 目录结构
-
-```
-frontend/
-├── src/
-│   ├── App.tsx                    # 根组件（连接→引导→主界面）
-│   ├── lib/ws.ts                  # WebSocket JSON-RPC 客户端
-│   ├── lib/constants.ts           # WS_URL / API_BASE
-│   ├── types/index.ts             # Agent / Session / Message / ModelRecommend 等
-│   ├── stores/
-│   │   ├── ui-store.ts            # theme / view / activeAgentId / activeSessionId
-│   │   └── chat-store.ts          # messages / isRunning / activity 流式状态
-│   ├── hooks/
-│   │   ├── use-agents.ts          # agents.list/create/update/delete
-│   │   ├── use-sessions.ts        # sessions.list/create/delete
-│   │   ├── use-chat.ts            # WS agent 事件订阅 + sendMessage + abort
-│   │   └── use-runtime.ts         # runtime.status + models.recommend + models.pull
-│   ├── components/
-│   │   ├── ui/index.tsx           # Button / Input / Textarea / Spinner
-│   │   ├── onboarding/
-│   │   │   ├── OnboardingWizard.tsx  # 两步引导：Setup → AgentCreate
-│   │   │   ├── SetupStep.tsx         # 硬件探测 + llama.cpp 库下载 + 模型推荐 + 拉取
-│   │   │   └── AgentCreateStep.tsx   # 预设角色选择 + 表单创建 Agent
-│   │   ├── agents/
-│   │   │   ├── AgentPanel.tsx        # Agent 列表 + 增删改
-│   │   │   └── AgentFormDialog.tsx   # Emoji/名称/模型/系统提示词表单
-│   │   ├── chat/
-│   │   │   ├── ChatCanvas.tsx        # 消息区 + dots 背景 + 空状态
-│   │   │   ├── MessageBubble.tsx     # 用户/Assistant/Tool 气泡 + Markdown
-│   │   │   └── InputBar.tsx          # 自增高 textarea + 发送/停止按钮
-│   │   └── layout/
-│   │       ├── AppShell.tsx          # 侧边栏 + 主内容区
-│   │       └── Sidebar.tsx           # Nav / Agent 列表 / Session 历史
-│   └── index.css                  # Tailwind + OKLCH 设计体系（dark/light）
-└── package.json
-```
-
-### 14.3 三个核心流程
+### 13.2 三个核心流程
 
 **初始化引导（首次启动）**
 1. App 启动 → WS 连接 Gateway → 读 `onboarded` 状态
@@ -917,74 +665,4 @@ frontend/
 - 支持新建（含 Emoji 选择、预设角色）、编辑、删除
 - 删除前确认，删除当前选中 Agent 时清空 activeAgentId
 
----
 
-## 15. 一阶段实现路线图
-
-1. **骨架**：`store`（SQLite + migrations）、`bus`（泛型事件总线）、`app` wiring、`cmd/nurvisd`。
-2. **本地推理就绪**：`hardware.Probe` + `llamax.Runtime.EnsureReady`（首启自动 `download.LlamaInstall` 到 `~/.nurvis/lib`） + `modelmgr` 默认拉取 `ggml-org/gemma-3-4b-it-GGUF`。
-3. **Provider + Tool Registry**：yzma Provider（含 `pkg/message.ParseToolCalls` 集成）、内置工具（fs/exec/http）。
-4. **Agent Loop**：8 阶段管线 + 会话/消息落库 + 流式事件。
-5. **Gateway**：WS JSON-RPC server + 方法路由 + 事件订阅推送（先打通 `chat.*` 与 `runtime.*` / `models.*`）。
-6. **扩展能力**：MCP Manager、Skill Manager、授权白名单。
-7. **Scheduler**：cron 持久化 + 触发。
-8. **Channels**：微信、QQ 适配 + 入站调度（去重/防抖）。
-
-每步可独立编译运行、独立测试；接口先行，实现可替换。
-
----
-
-## 16. 初始化与依赖装配
-
-**职责分工**：组件的创建与组装是唯一知道「所有具体实现」的地方，统一收敛到 `internal/app/`。其余包（agent / gateway / tool ...）只依赖接口，绝不在内部自行创建依赖，全部由 `app` 注入。这是第 1 节「面向接口编程，新增实现不改主流程」的落点。
-
-- `cmd/nurvisd/main.go` 保持极薄：解析配置/参数 → `app.New(...)` → `app.Run(ctx)` → 处理信号优雅退出。不直接 new 任何业务组件。
-- `internal/app/` 负责按依赖顺序构建各组件、互相注入、注册到一起，并集中管理启动与关闭。
-
-**装配顺序**（有依赖关系，需串行）：
-
-| # | 组件 | 依赖 |
-|---|------|------|
-| 1 | `store`：打开 SQLite + 跑 migrations | 无 |
-| 2 | `bus`：事件总线 | 无 |
-| 3 | `hardware`：Probe 探测内存/GPU | 无 |
-| 4 | `llamax.Runtime`：EnsureReady（自动下载 `llama.cpp` 库 + `llama.Load` + `llama.Init`） | hardware, bus（lib 进度） |
-| 5 | `modelmgr`：本地 GGUF 目录管理 + HF 下载器 | store, bus（pull 进度） |
-| 6 | `provider`：yzma Provider（注入 runtime + modelmgr） | runtime, modelmgr |
-| 7 | `tool`：内置 Tool Registry | store（开关） |
-| 8 | `mcp` / `skill`：Manager 连接并把工具 adapter 进 Registry | tool, store |
-| 9 | `workspace`：WorkspaceManager | store |
-| 10 | `memory`：Memory / History Store | store |
-| 11 | `agent`：Manager（注入 provider/registry/...） | 6~10 |
-| 12 | `scheduler`：从 store 重建 cron，绑定 agent | agent, store |
-| 13 | `channel`：实例化 wechat/qq + 入站 Dispatcher | agent, bus |
-| 14 | `gateway`：WS server + method router（注入各 mgr） | 以上全部 |
-
-**聚合结构体**：`app` 持有所有长生命周期组件，集中管理启停。
-
-```go
-// internal/app/app.go
-type App struct {
-    cfg     Config
-    store   *store.Store
-    bus     bus.Bus
-    runtime llamax.Runtime
-    models  modelmgr.Manager
-    agents  *agent.Manager
-    sched   *scheduler.Scheduler
-    chans   []channel.Channel
-    gw      *gateway.Server
-}
-
-func New(ctx context.Context, cfg Config) (*App, error) {
-    // 按上表顺序逐个构建并注入；任一失败回滚已开资源
-}
-
-func (a *App) Run(ctx context.Context) error { /* 启动 gateway/scheduler/channels，阻塞至 ctx.Done */ }
-func (a *App) Close() error                  { /* 逆序关闭：channel→scheduler→gateway→agents→runtime(llama.Close)→store */ }
-```
-
-**约定**：
-- 关闭顺序与初始化逆序，`llamax.Runtime.Close()`（执行 `llama.Close`）在 SQLite 之前。
-- `New` 变长时可拆 `buildStore / buildRuntime / buildAgents` 等私有方法，仍集中在 app 包内。
-- 一阶段单机单进程，手写装配即可，不引入 wire/fx 等 DI 框架。
