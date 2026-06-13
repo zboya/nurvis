@@ -6,13 +6,13 @@
 // render progress with no extra wiring.
 //
 // Lifecycle:
-//   1. publish agent.run.started
-//   2. persist user message
-//   3. resolve gosd ModelConfig from the agent's options_json
-//   4. call gosd.Engine.GenerateImage / GenerateVideo
-//   5. expose the local artifact via MediaPreviewURL (preview registry)
-//   6. persist the assistant message (content = caption, media_json = artifact)
-//   7. publish agent.run.completed with the media payload
+//  1. publish agent.run.started
+//  2. persist user message
+//  3. resolve gosd ModelConfig from the agent's options_json
+//  4. call gosd.Engine.GenerateImage / GenerateVideo
+//  5. expose the local artifact via MediaPreviewURL (preview registry)
+//  6. persist the assistant message (content = caption, media_json = artifact)
+//  7. publish agent.run.completed with the media payload
 package agent
 
 import (
@@ -28,22 +28,22 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/zboya/nurvis/internal/backends/gosd"
 	"github.com/zboya/nurvis/internal/bus"
-	"github.com/zboya/nurvis/internal/gosd"
 	"github.com/zboya/nurvis/internal/store/repo"
 )
 
 // mediaLoop is the to-image / to-video execution unit.
 type mediaLoop struct {
-	agent      *Agent
-	sessionID  string
-	req        ChatRequest
-	sessions   *repo.SessionRepo
-	messages   *repo.MessageRepo
-	bus        bus.Bus
-	rt         gosd.Runtime
-	outDir     string
-	makeURL    func(string) (string, error)
+	agent     *Agent
+	sessionID string
+	req       ChatRequest
+	sessions  *repo.SessionRepo
+	messages  *repo.MessageRepo
+	bus       bus.Bus
+	rt        gosd.Runtime
+	outDir    string
+	makeURL   func(string) (string, error)
 }
 
 func newMediaLoop(

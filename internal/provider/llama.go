@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/zboya/nurvis/internal/llamax"
+	"github.com/zboya/nurvis/internal/backends/llamax"
 	"github.com/zboya/nurvis/internal/modelmgr"
 )
 

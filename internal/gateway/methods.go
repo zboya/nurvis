@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 
 	"github.com/zboya/nurvis/internal/agent"
+	"github.com/zboya/nurvis/internal/backends/llamax"
 	"github.com/zboya/nurvis/internal/bus"
 	"github.com/zboya/nurvis/internal/hardware"
-	"github.com/zboya/nurvis/internal/llamax"
 	"github.com/zboya/nurvis/internal/mcp"
 	"github.com/zboya/nurvis/internal/modelmgr"
 	"github.com/zboya/nurvis/internal/provider"

@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/zboya/nurvis/internal/backends/gosd"
 	"github.com/zboya/nurvis/internal/bus"
-	"github.com/zboya/nurvis/internal/gosd"
 	"github.com/zboya/nurvis/internal/provider"
 	"github.com/zboya/nurvis/internal/skill"
 	"github.com/zboya/nurvis/internal/store/repo"
