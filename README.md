@@ -203,7 +203,7 @@ flowchart LR
 
 ```bash
 # 克隆仓库
-git clone https://github.com/<your-org>/nurvis.git
+git clone https://github.com/zboya/nurvis.git
 cd nurvis
 
 # 拉取 vendor 依赖
@@ -236,7 +236,7 @@ nurvis/
 │   ├── gateway/             # WS JSON-RPC 网关
 │   ├── agent/               # Agent Manager + 8 阶段 Loop
 │   ├── provider/            # LLM Provider（llama.cpp / openai 兼容）
-│   ├── llamax/              # llama.cpp Runtime 封装
+│   ├── backends/            # llama.cpp Runtime 封装
 │   ├── modelmgr/            # 本地 GGUF 管理 + HF 下载
 │   ├── hardware/            # 硬件探测
 │   ├── tool/                # 工具接口 + 内置工具
