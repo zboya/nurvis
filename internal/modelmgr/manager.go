@@ -202,6 +202,16 @@ func (m *manager) List(ctx context.Context) ([]ModelInfo, error) {
 }
 
 func (m *manager) Resolve(name string) (string, error) {
+	// Fast path: if the caller already passed an absolute path that exists
+	// on disk, return it as-is. This lets users point to GGUF / safetensors
+	// files outside the managed models dir (e.g. via the agent form's
+	// "browse local file" picker).
+	if trimmed := strings.TrimSpace(name); filepath.IsAbs(trimmed) {
+		if _, err := os.Stat(trimmed); err == nil {
+			return trimmed, nil
+		}
+	}
+
 	ref, err := ParseRef(name)
 	if err != nil {
 		return "", err
