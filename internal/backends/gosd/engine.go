@@ -231,6 +231,9 @@ func (e *engineImpl) GenerateImage(ctx context.Context, req ImageRequest, onProg
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateImageSize(req.Width, req.Height); err != nil {
+		return nil, err
+	}
 	e.genMu.Lock()
 	defer e.genMu.Unlock()
 
@@ -404,6 +407,9 @@ func (e *engineImpl) GenerateVideo(ctx context.Context, req VideoRequest, onProg
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateImageSize(req.Width, req.Height); err != nil {
+		return nil, err
+	}
 	e.genMu.Lock()
 	defer e.genMu.Unlock()
 
@@ -552,6 +558,48 @@ func outputExt(format, mime string) string {
 
 func hasAnyModel(c ModelConfig) bool {
 	return c.LegacyModelPath != "" || c.DiffusionModelPath != ""
+}
+
+// maxImageDimension is the upper bound (in pixels) we accept for width or
+// height of generated images / video frames. Anything larger almost always
+// exhausts VRAM and crashes sd-server, so we reject it up front.
+const maxImageDimension int32 = 2048
+
+// imageDimensionAlignment is the required multiple for width / height. SD /
+// SDXL / Flux VAEs all operate on an 8-pixel grid; non-multiples cause
+// sd-server to error out (or silently round).
+const imageDimensionAlignment int32 = 8
+
+// validateImageSize enforces:
+//   - width / height must be non-negative
+//   - width / height must be <= maxImageDimension (2048)
+//   - width / height must be a multiple of imageDimensionAlignment (8)
+//
+// A value of 0 is allowed and means "use sd-server default" (which is 512).
+func validateImageSize(width, height int32) error {
+	if err := validateOneDimension("width", width); err != nil {
+		return err
+	}
+	if err := validateOneDimension("height", height); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOneDimension(name string, v int32) error {
+	if v == 0 {
+		return nil
+	}
+	if v < 0 {
+		return fmt.Errorf("gosd: %s must be non-negative, got %d", name, v)
+	}
+	if v > maxImageDimension {
+		return fmt.Errorf("gosd: %s %d exceeds maximum of %d", name, v, maxImageDimension)
+	}
+	if v%imageDimensionAlignment != 0 {
+		return fmt.Errorf("gosd: %s %d must be a multiple of %d", name, v, imageDimensionAlignment)
+	}
+	return nil
 }
 
 // loadImageBase64 reads imgPath and returns its standard base64 string.
