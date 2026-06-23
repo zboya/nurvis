@@ -265,7 +265,7 @@ func (l *mediaLoop) resolveModelConfig() (gosd.ModelConfig, error) {
 		DiffusionModelPath: optString(opts, "diffusion_model"),
 		HighNoiseModelPath: optString(opts, "high_noise"),
 		VAEPath:            optString(opts, "vae"),
-		TextEncoderPath:    optString(opts, "text_encoder"),
+		TextEncoderPath:    l.agent.ChatModel,
 		ClipLPath:          optString(opts, "clip_l"),
 		ClipGPath:          optString(opts, "clip_g"),
 		LoraModelDir:       optString(opts, "lora_dir"),

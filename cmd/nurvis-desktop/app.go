@@ -73,6 +73,7 @@ func (s *service) SelectDirectory() (string, error) {
 		CanChooseFiles(false).
 		CanChooseDirectories(true).
 		CanCreateDirectories(true).
+		ShowHiddenFiles(true).
 		PromptForSingleSelection()
 	if err != nil {
 		return "", err
@@ -88,6 +89,7 @@ func (s *service) SelectFiles() ([]string, error) {
 		SetTitle("选择附件").
 		CanChooseFiles(true).
 		CanChooseDirectories(false).
+		ShowHiddenFiles(true).
 		PromptForMultipleSelection()
 	if err != nil {
 		return nil, err
