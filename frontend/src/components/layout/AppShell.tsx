@@ -4,6 +4,7 @@ import { useUiStore } from '../../stores/ui-store'
 import { ChatCanvas } from '../chat/ChatCanvas'
 import { SettingsPanel } from '../settings/SettingsPanel'
 import { Spinner } from '../ui'
+import { useEnsureDefaultAgents } from '../../hooks/use-ensure-default-agents'
 import { clsx } from 'clsx'
 
 export function AppShell() {
@@ -11,6 +12,10 @@ export function AppShell() {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen)
   const pendingAgents = useUiStore((s) => s.pendingAgents)
   const removePendingAgent = useUiStore((s) => s.removePendingAgent)
+
+  // Backfill the two built-in default agents if the user landed here with
+  // none — e.g. after skipping onboarding before downloads finished.
+  useEnsureDefaultAgents()
 
   return (
     <div className="flex h-dvh bg-surface-primary overflow-hidden">
