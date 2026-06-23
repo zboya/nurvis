@@ -85,6 +85,12 @@ func (l *mediaLoop) Run(ctx context.Context) error {
 	})
 	l.emitStage("preparing", "start")
 
+	if err := l.ensureSession(ctx); err != nil {
+		// Failing to create the session row would leave the message orphaned
+		// (not visible in the sidebar history). Surface this as a hard error.
+		return l.fail(ctx, fmt.Errorf("create session: %w", err))
+	}
+
 	if err := l.persistUserMessage(ctx); err != nil {
 		slog.Warn("media-loop: persist user message failed", "err", err)
 	}
@@ -217,6 +223,19 @@ func (l *mediaLoop) emitStage(stage, event string) {
 		"session_id": l.sessionID,
 		"stage":      stage,
 		"event":      event,
+	})
+}
+
+func (l *mediaLoop) ensureSession(ctx context.Context) error {
+	projID := l.req.ProjectID
+	if projID == "" {
+		projID = l.agent.DefaultProject
+	}
+	return l.sessions.EnsureCreated(ctx, repo.Session{
+		ID:        l.sessionID,
+		AgentID:   l.agent.ID,
+		ProjectID: projID,
+		Channel:   l.req.Channel,
 	})
 }
 
