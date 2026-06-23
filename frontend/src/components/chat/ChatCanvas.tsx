@@ -236,7 +236,12 @@ export function ChatCanvas() {
               ))
             )}
 
-            {isRunning && activity && !(activity.phase === 'thinking' && messages.some((m) => m.id === lastAssistantId && m.isThinking)) && (
+            {isRunning && activity && !(activity.phase === 'thinking' && messages.some((m) => {
+              if (m.id !== lastAssistantId) return false
+              // Hide the standalone "thinking" dot when the last assistant bubble
+              // is already streaming any content (reasoning or final answer).
+              return m.isThinking || !!m.thinkContent || (m.content ?? '').trim() !== ''
+            })) && (
               <ActivityDot phase={activity.phase} tool={activity.tool} />
             )}
 
