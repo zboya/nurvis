@@ -65,15 +65,46 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
     set((s) => {
       if (!p?.model) return s
       const prev = s.pulls[p.model]
-      // Late-arriving event for an entry the user already dismissed: ignore.
-      if (!prev) return s
       const lower = (p.status ?? '').toLowerCase()
       const isError = !!p.error || lower === 'error'
       const isSuccess = !isError && lower.includes('success')
+      // Late-arriving event for an entry the user explicitly dismissed could
+      // be ignored, but we can't tell "never seen" from "dismissed" here.
+      // Accept missing prev so events from pulls kicked off outside this tab
+      // (e.g. the onboarding wizard) still land in the store correctly.
+      if (!prev) {
+        // Try to recover repo/file from the canonical "repo/file" id.
+        let repo: string | undefined
+        let file: string | undefined
+        const parts = p.model.split('/')
+        if (parts.length >= 2) {
+          file = parts[parts.length - 1]
+          repo = parts.slice(0, -1).join('/')
+        }
+        return {
+          pulls: {
+            ...s.pulls,
+            [p.model]: {
+              model: p.model,
+              repo,
+              file,
+              status: p.status ?? 'downloading',
+              percent: typeof p.percent === 'number' ? p.percent : (isSuccess ? 100 : 0),
+              current: typeof p.current === 'number' ? p.current : 0,
+              total: typeof p.total === 'number' ? p.total : 0,
+              done: isSuccess,
+              interrupted: false,
+              error: isError ? (p.error || '拉取失败') : undefined,
+              startedAt: Date.now(),
+              finishedAt: isSuccess || isError ? Date.now() : undefined,
+            },
+          },
+        }
+      }
       const next: ModelState = {
         ...prev,
         status: p.status ?? prev.status,
-        percent: typeof p.percent === 'number' ? p.percent : prev.percent,
+        percent: typeof p.percent === 'number' ? p.percent : (isSuccess ? 100 : prev.percent),
         current: typeof p.current === 'number' ? p.current : prev.current,
         total: typeof p.total === 'number' ? p.total : prev.total,
         done: isSuccess || prev.done,
@@ -109,20 +140,24 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
     set((s) => {
       const next: Record<string, ModelState> = { ...s.pulls }
       for (const r of rows) {
-        // Don't clobber a locally-progressing entry: only fill from backend if
-        // the local copy is missing or the backend has a more recent row.
         const prev = next[r.model]
         const lower = (r.status ?? '').toLowerCase()
         const isError = lower === 'error'
         const isSuccess = lower === 'success'
         const isInterrupted = lower === 'interrupted'
-        if (prev && !prev.done && !prev.error && !prev.interrupted) continue
+        const isTerminal = isError || isSuccess || isInterrupted
+        // Skip when local already has a fresher non-terminal progress AND the
+        // backend hasn't reached a terminal state yet. If the backend is
+        // terminal (success/error/interrupted), always overwrite — this lets
+        // the UI recover when a `models.pull.progress` success event was
+        // missed (e.g. fired before the global subscription mounted).
+        if (prev && !prev.done && !prev.error && !prev.interrupted && !isTerminal) continue
         next[r.model] = {
           model: r.model,
           repo: r.repo,
           file: r.file,
           status: r.status,
-          percent: r.percent ?? 0,
+          percent: isSuccess ? 100 : (r.percent ?? 0),
           current: r.current ?? 0,
           total: r.total ?? 0,
           done: isSuccess,
@@ -130,8 +165,8 @@ export const useModelStore = create<ModelStore>()((set, get) => ({
           error: isError ? (r.error || '拉取失败')
             : isInterrupted ? (r.error || '进程已重启，下载已中断')
             : undefined,
-          startedAt: r.started_at || Date.now(),
-          finishedAt: r.finished_at || undefined,
+          startedAt: r.started_at || prev?.startedAt || Date.now(),
+          finishedAt: r.finished_at || (isTerminal ? Date.now() : prev?.finishedAt),
         }
       }
       return { pulls: next }

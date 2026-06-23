@@ -173,14 +173,44 @@ export function ModelsTab() {
   const startPull = useModelStore((s) => s.start)
   const failPull = useModelStore((s) => s.fail)
   const dismissPull = useModelStore((s) => s.dismiss)
+  const updatePull = useModelStore((s) => s.update)
+  const hydratePulls = useModelStore((s) => s.hydrate)
   const pullEntries = Object.values(pulls).sort((a, b) => a.startedAt - b.startedAt)
   const hasActivePull = pullEntries.some((p) => !p.done && !p.error && !p.interrupted)
 
   const loadModels = () => {
     ws.call<{ models: ModelInfo[] }>('models.list')
-      .then((r) => setModels(r.models ?? []))
+      .then((r) => {
+        const list = r.models ?? []
+        setModels(list)
+        // Reconcile: any in-flight pull whose file already lives in the
+        // installed list must be done. This fixes the "同时已下载和正在下载"
+        // case where a `models.pull.progress` success event was missed
+        // (e.g. fired before the global subscription mounted).
+        const installedFiles = new Set(list.map((m) => m.name))
+        const pulls = useModelStore.getState().pulls
+        for (const key in pulls) {
+          const p = pulls[key]
+          if (p.done || p.error || p.interrupted) continue
+          const file = p.file || key.split('/').pop()
+          if (file && installedFiles.has(file)) {
+            updatePull({
+              model: p.model,
+              status: 'success',
+              percent: 100,
+              current: p.total || p.current,
+              total: p.total,
+            })
+          }
+        }
+      })
       .catch(() => setModels([]))
       .finally(() => setLoading(false))
+    // Also pull authoritative pull rows from the backend so terminal states
+    // (success/error/interrupted) overwrite any stale in-memory entry.
+    ws.call<{ pulls: import('../../types').ModelRow[] }>('models.pull_list')
+      .then((r) => hydratePulls(r.pulls ?? []))
+      .catch(() => { /* ignore */ })
   }
 
   useEffect(() => {
