@@ -38,7 +38,7 @@ func (m *manager) ListLibrary(ctx context.Context, search string, limit int) ([]
 	}
 
 	q := url.Values{}
-	q.Set("filter", "gguf")        // library=gguf
+	// q.Set("filter", "gguf")        // library=gguf
 	q.Set("sort", "trendingScore") // sort=trending
 	q.Set("direction", "-1")       // 降序
 	q.Set("full", "true")          // 返回完整信息（含 safetensors 等）
