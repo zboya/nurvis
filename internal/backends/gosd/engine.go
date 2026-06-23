@@ -1,15 +1,13 @@
 // Package gosd: Engine — supervises one sd-server child process and talks
 // to it over HTTP.
 //
-// Image generation goes through `POST /v1/images/generations` (the OpenAI-
-// compatible synchronous endpoint). When sdcpp-native fields (negative
-// prompt, init image, sample steps, cfg scale, seed) are needed they are
-// embedded in the prompt via the `<sd_cpp_extra_args>{...}</sd_cpp_extra_args>`
-// extension that the server understands and strips before generation.
+// Image generation goes through `POST /sdcpp/v1/img_gen` + polling
+// `GET /sdcpp/v1/jobs/{id}` (the native sdcpp async endpoint). The request
+// body uses the native sdcpp schema directly, so no `<sd_cpp_extra_args>`
+// embedding is needed.
 //
 // Video generation goes through `POST /sdcpp/v1/vid_gen` + polling
-// `GET /sdcpp/v1/jobs/{id}` because the OpenAI compatibility surface does
-// not currently cover video.
+// `GET /sdcpp/v1/jobs/{id}` — same job model.
 package gosd
 
 import (
@@ -189,35 +187,41 @@ func (e *engineImpl) Close() error {
 
 // ───────────────────────────── Image ─────────────────────────────
 
-// openAIImageRequest matches the supported subset of POST /v1/images/generations.
-type openAIImageRequest struct {
-	Prompt            string `json:"prompt"`
-	N                 int    `json:"n,omitempty"`
-	Size              string `json:"size,omitempty"`
-	OutputFormat      string `json:"output_format,omitempty"`
-	OutputCompression int    `json:"output_compression,omitempty"`
-}
-
-type openAIImageResponse struct {
-	Created      int64  `json:"created"`
-	OutputFormat string `json:"output_format"`
-	Data         []struct {
-		B64JSON string `json:"b64_json"`
-	} `json:"data"`
-}
-
-// imgExtraArgs is the JSON payload embedded inside the prompt via
-// <sd_cpp_extra_args>...</sd_cpp_extra_args>. Field names mirror the native
-// sdcpp API (see examples/server/api.md).
-type imgExtraArgs struct {
+// imgGenRequest is the native /sdcpp/v1/img_gen request body. Field names
+// mirror the schema documented in examples/server/api.md.
+type imgGenRequest struct {
+	Prompt         string         `json:"prompt"`
 	NegativePrompt string         `json:"negative_prompt,omitempty"`
 	Width          int32          `json:"width,omitempty"`
 	Height         int32          `json:"height,omitempty"`
 	Strength       float32        `json:"strength,omitempty"`
 	Seed           int64          `json:"seed,omitempty"`
-	InitImage      string         `json:"init_image,omitempty"` // base64 / data URL
+	BatchCount     int            `json:"batch_count,omitempty"`
+	InitImage      string         `json:"init_image,omitempty"`
 	RefImages      []string       `json:"ref_images,omitempty"`
 	SampleParams   map[string]any `json:"sample_params,omitempty"`
+	OutputFormat   string         `json:"output_format,omitempty"`
+}
+
+// imgGenJobResult mirrors the `result` block of a completed img_gen job.
+type imgGenJobResult struct {
+	OutputFormat string `json:"output_format"`
+	Images       []struct {
+		Index   int    `json:"index"`
+		B64JSON string `json:"b64_json"`
+	} `json:"images"`
+}
+
+type imgJobStatusResponse struct {
+	ID            string           `json:"id"`
+	Kind          string           `json:"kind"`
+	Status        string           `json:"status"`
+	QueuePosition int              `json:"queue_position"`
+	Result        *imgGenJobResult `json:"result"`
+	Error         *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 func (e *engineImpl) GenerateImage(ctx context.Context, req ImageRequest, onProgress ProgressFunc) (*Artifact, error) {
@@ -234,22 +238,25 @@ func (e *engineImpl) GenerateImage(ctx context.Context, req ImageRequest, onProg
 		onProgress("generating", 0)
 	}
 
-	extra := imgExtraArgs{
+	body := imgGenRequest{
+		Prompt:         req.Prompt,
 		NegativePrompt: req.NegativePrompt,
 		Width:          req.Width,
 		Height:         req.Height,
 		Seed:           req.Seed,
+		BatchCount:     1,
+		OutputFormat:   "png",
 	}
 	if req.InitImagePath != "" {
 		b64, err := loadImageBase64(req.InitImagePath)
 		if err != nil {
 			return nil, fmt.Errorf("gosd: load init image: %w", err)
 		}
-		extra.InitImage = b64
+		body.InitImage = b64
 		if req.StrengthVal > 0 {
-			extra.Strength = req.StrengthVal
+			body.Strength = req.StrengthVal
 		} else {
-			extra.Strength = 0.75
+			body.Strength = 0.75
 		}
 	}
 	for _, p := range req.RefImagePaths {
@@ -257,7 +264,7 @@ func (e *engineImpl) GenerateImage(ctx context.Context, req ImageRequest, onProg
 		if err != nil {
 			return nil, fmt.Errorf("gosd: load ref image %q: %w", p, err)
 		}
-		extra.RefImages = append(extra.RefImages, b64)
+		body.RefImages = append(body.RefImages, b64)
 	}
 	sample := map[string]any{}
 	if req.SampleSteps > 0 {
@@ -267,69 +274,86 @@ func (e *engineImpl) GenerateImage(ctx context.Context, req ImageRequest, onProg
 		sample["guidance"] = map[string]any{"txt_cfg": req.CFGScale}
 	}
 	if len(sample) > 0 {
-		extra.SampleParams = sample
+		body.SampleParams = sample
 	}
 
-	prompt := req.Prompt
-	if hasAny(extra) {
-		raw, _ := json.Marshal(extra)
-		prompt = prompt + " <sd_cpp_extra_args>" + string(raw) + "</sd_cpp_extra_args>"
-	}
-
-	size := ""
-	if req.Width > 0 && req.Height > 0 {
-		size = fmt.Sprintf("%dx%d", req.Width, req.Height)
-	}
-	body := openAIImageRequest{
-		Prompt:       prompt,
-		N:            1,
-		Size:         size,
-		OutputFormat: "png",
-	}
 	raw, _ := json.Marshal(body)
-
-	url := e.baseURL() + "/v1/images/generations"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		e.baseURL()+"/sdcpp/v1/img_gen", bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := e.httpCli.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("gosd: POST /v1/images/generations: %w", err)
+		return nil, fmt.Errorf("gosd: POST /sdcpp/v1/img_gen: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gosd: sd-server HTTP %d: %s", resp.StatusCode, string(msg))
+		return nil, fmt.Errorf("gosd: img_gen submit HTTP %d: %s", resp.StatusCode, string(msg))
 	}
-	var out openAIImageResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("gosd: decode response: %w", err)
+	var sub jobSubmitResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sub); err != nil {
+		return nil, fmt.Errorf("gosd: decode submit: %w", err)
 	}
-	if len(out.Data) == 0 || out.Data[0].B64JSON == "" {
-		return nil, errors.New("gosd: empty image response")
-	}
-	imgBytes, err := base64.StdEncoding.DecodeString(out.Data[0].B64JSON)
-	if err != nil {
-		return nil, fmt.Errorf("gosd: decode b64: %w", err)
-	}
-	artifact, err := saveImageBytes(imgBytes, req.OutputPath)
-	if err != nil {
-		return nil, err
-	}
-	artifact.Width = int(req.Width)
-	artifact.Height = int(req.Height)
-	if onProgress != nil {
-		onProgress("ready", 1.0)
-	}
-	return artifact, nil
-}
 
-func hasAny(e imgExtraArgs) bool {
-	return e.NegativePrompt != "" || e.Width != 0 || e.Height != 0 ||
-		e.Strength != 0 || e.Seed != 0 || e.InitImage != "" ||
-		len(e.RefImages) > 0 || len(e.SampleParams) > 0
+	// Poll until terminal status.
+	pollURL := e.baseURL() + "/sdcpp/v1/jobs/" + sub.ID
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
+		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		pres, perr := e.httpCli.Do(req2)
+		if perr != nil {
+			return nil, fmt.Errorf("gosd: poll job: %w", perr)
+		}
+		var st imgJobStatusResponse
+		dec := json.NewDecoder(pres.Body)
+		_ = dec.Decode(&st)
+		_ = pres.Body.Close()
+		if onProgress != nil {
+			onProgress("polling", 0.5)
+		}
+		switch st.Status {
+		case "completed":
+			if st.Result == nil || len(st.Result.Images) == 0 || st.Result.Images[0].B64JSON == "" {
+				return nil, errors.New("gosd: completed job has no image result")
+			}
+			imgBytes, err := base64.StdEncoding.DecodeString(st.Result.Images[0].B64JSON)
+			if err != nil {
+				return nil, fmt.Errorf("gosd: decode b64: %w", err)
+			}
+			artifact, err := saveImageBytes(imgBytes, req.OutputPath)
+			if err != nil {
+				return nil, err
+			}
+			artifact.Width = int(req.Width)
+			artifact.Height = int(req.Height)
+			if onProgress != nil {
+				onProgress("ready", 1.0)
+			}
+			return artifact, nil
+		case "failed":
+			msg := "unknown error"
+			if st.Error != nil {
+				msg = st.Error.Message
+			}
+			return nil, fmt.Errorf("gosd: img_gen failed: %s", msg)
+		case "cancelled":
+			return nil, errors.New("gosd: img_gen cancelled")
+		case "queued", "generating", "":
+			continue
+		default:
+			continue
+		}
+	}
 }
 
 // ───────────────────────────── Video ─────────────────────────────

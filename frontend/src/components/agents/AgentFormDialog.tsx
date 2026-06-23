@@ -21,7 +21,7 @@ interface FormData {
   max_rounds: number
   context_window: number
   tag: 'to-text' | 'to-image' | 'to-video'
-  chat_model: string
+  diffusion_model: string
   vae_path: string
 }
 
@@ -100,6 +100,17 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
     }
   })()
 
+  // Parse existing diffusion_model path from options_json (media tags only)
+  const initialDiffusionModel = (() => {
+    try {
+      const opts = agent?.options_json ? JSON.parse(agent.options_json) : null
+      const v = opts?.diffusion_model
+      return typeof v === 'string' ? v : ''
+    } catch {
+      return ''
+    }
+  })()
+
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<FormData>({
     defaultValues: {
       name: agent?.name ?? '',
@@ -108,7 +119,7 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
       max_rounds: agent?.max_rounds ?? 16,
       context_window: initialContextWindow,
       tag: (agent?.tag as 'to-text' | 'to-image' | 'to-video') ?? 'to-text',
-      chat_model: agent?.chat_model ?? '',
+      diffusion_model: initialDiffusionModel,
       vae_path: initialVaePath,
     },
   })
@@ -116,7 +127,7 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
   const watchedTag = watch('tag')
   const isMediaTag = watchedTag === 'to-image' || watchedTag === 'to-video'
   const watchedModel = watch('model')
-  const watchedChatModel = watch('chat_model')
+  const watchedDiffusionModel = watch('diffusion_model')
 
   // Treat a value as a local file path when it doesn't match any registered
   // model name. In that case the field is rendered as a free-text Input so
@@ -125,7 +136,7 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
     !!v && localModels.length > 0 && !localModels.includes(v)
 
   const pickLocalFile = async (
-    field: 'model' | 'chat_model' | 'vae_path'
+    field: 'model' | 'diffusion_model' | 'vae_path'
   ) => {
     try {
       const files = await SelectFiles()
@@ -158,6 +169,19 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
         // Clear stale vae when switching away from media tag or emptied
         delete mergedOptions.vae
       }
+      const diffusionTrimmed = (data.diffusion_model ?? '').trim()
+      if (isMediaTag && diffusionTrimmed) {
+        mergedOptions.diffusion_model = diffusionTrimmed
+      } else {
+        // Clear stale diffusion_model when switching away from media tag
+        delete mergedOptions.diffusion_model
+      }
+
+      if (isMediaTag && !diffusionTrimmed) {
+        setError('to-image / to-video 助手必须填写扩散模型路径')
+        setSaving(false)
+        return
+      }
 
       const input: AgentInput & { emoji?: string; options?: Record<string, unknown> } = {
         name: data.name.trim(),
@@ -170,12 +194,6 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
         allowed_tools: selectedTools.size > 0 ? Array.from(selectedTools) : [],
         options: mergedOptions,
         tag: data.tag,
-        chat_model: isMediaTag ? data.chat_model.trim() : undefined,
-      }
-      if (isMediaTag && !data.chat_model.trim()) {
-        setError('to-image / to-video 助手必须选择对话模型')
-        setSaving(false)
-        return
       }
       let res: { agent: Agent }
       if (isEdit) {
@@ -257,7 +275,7 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
 
           <div className="space-y-1">
             <label className="block text-xs font-medium text-text-secondary">
-              {isMediaTag ? '扩散模型（diffusion）' : '模型'}
+              对话模型（chat model）
             </label>
             {modelsLoading ? (
               <div className="text-xs text-text-muted py-2">加载模型列表…</div>
@@ -287,44 +305,47 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
             {errors.model?.message && localModels.length > 0 && !isCustomPath(watchedModel) && (
               <p className="text-xs text-error">{errors.model.message}</p>
             )}
+            {isMediaTag && (
+              <p className="text-xs text-text-muted">
+                负责与用户对话、润色 prompt、说明生成结果；不会用于实际的图片/视频推理。
+              </p>
+            )}
           </div>
 
           {isMediaTag && (
             <div className="space-y-1">
               <label className="block text-xs font-medium text-text-secondary">
-                对话模型（chat model，必填）
+                扩散模型（diffusion，必填）
               </label>
-              {modelsLoading ? (
-                <div className="text-xs text-text-muted py-2">加载模型列表…</div>
-              ) : localModels.length > 0 && !isCustomPath(watchedChatModel) ? (
+              {localModels.length > 0 && !isCustomPath(watchedDiffusionModel) ? (
                 <div className="relative">
                   <select
                     className="w-full bg-surface-tertiary border border-border rounded-lg pl-3 pr-10 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-                    {...register('chat_model', { required: isMediaTag ? '请选择对话模型' : false })}
+                    {...register('diffusion_model', { required: isMediaTag ? '请选择扩散模型' : false })}
                   >
                     <option value="">请选择…</option>
                     {localModels.map((m) => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                  <FolderPickButton onClick={() => pickLocalFile('chat_model')} />
+                  <FolderPickButton onClick={() => pickLocalFile('diffusion_model')} />
                 </div>
               ) : (
                 <div className="relative">
                   <Input
                     className="pr-10"
-                    placeholder="gemma4:e4b 或 /absolute/path/to/model.gguf"
-                    {...register('chat_model', { required: isMediaTag ? '请填写对话模型' : false })}
-                    error={errors.chat_model?.message}
+                    placeholder="/absolute/path/to/diffusion.gguf"
+                    {...register('diffusion_model', { required: isMediaTag ? '请填写扩散模型' : false })}
+                    error={errors.diffusion_model?.message}
                   />
-                  <FolderPickButton onClick={() => pickLocalFile('chat_model')} />
+                  <FolderPickButton onClick={() => pickLocalFile('diffusion_model')} />
                 </div>
               )}
-              {errors.chat_model?.message && (
-                <p className="text-xs text-error">{errors.chat_model.message}</p>
+              {errors.diffusion_model?.message && (
+                <p className="text-xs text-error">{errors.diffusion_model.message}</p>
               )}
               <p className="text-xs text-text-muted">
-                负责与用户对话、润色 prompt、说明生成结果；不会用于实际的图片/视频推理。
+                由 sd-server 加载，用于实际的图像/视频生成。
               </p>
             </div>
           )}

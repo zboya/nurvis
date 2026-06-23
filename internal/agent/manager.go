@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -178,18 +177,6 @@ func (m *Manager) Create(ctx context.Context, a Agent) (*Agent, error) {
 		}
 	}
 
-	// to-image / to-video agents need a chat-capable LLM in addition to the
-	// diffusion model, otherwise they cannot converse with the user
-	// (prompt refinement, summary, follow-up questions).
-	if a.Tag == TagToImage || a.Tag == TagToVideo {
-		if strings.TrimSpace(a.ChatModel) == "" {
-			return nil, fmt.Errorf("agent: %s agents require a chat_model", a.Tag)
-		}
-	} else {
-		// to-text agents do not use chat_model; clear stale values.
-		a.ChatModel = ""
-	}
-
 	return m.repo.Create(ctx, a)
 }
 
@@ -213,13 +200,6 @@ func (m *Manager) Update(ctx context.Context, a Agent) (*Agent, error) {
 	}
 	if !IsValidTag(a.Tag) {
 		a.Tag = TagToText
-	}
-	if a.Tag == TagToImage || a.Tag == TagToVideo {
-		if strings.TrimSpace(a.ChatModel) == "" {
-			return nil, fmt.Errorf("agent: %s agents require a chat_model", a.Tag)
-		}
-	} else {
-		a.ChatModel = ""
 	}
 	return m.repo.Update(ctx, a)
 }

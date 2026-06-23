@@ -26,12 +26,17 @@
 <div align="center">
 
 ### 主界面 · 多 Agent 流式对话
-<img src="./main.png" alt="Nurvis 主界面" width="90%" />
+<img src="./statics/main.png" alt="Nurvis 主界面" width="90%" />
+
+<br/><br/>
+
+### 生成图片
+<img src="./statics/pic.png" alt="Nurvis 对话生图图片" width="90%" />
 
 <br/><br/>
 
 ### 设置界面 · Agent / 模型 / MCP / Skill / Channel 一站式管理
-<img src="./setting.png" alt="Nurvis 设置界面" width="90%" />
+<img src="./statics/setting.png" alt="Nurvis 设置界面" width="90%" />
 
 </div>
 
@@ -79,12 +84,12 @@ Wails3 + React 19 + Tailwind v4 + OKLCH 设计体系，原生窗口 + Web 渲染
 2. 下载与本机匹配的 `llama.cpp` 动态库到 `~/.nurvis/lib`（macOS arm64 → Metal；Linux/Win → CUDA / Vulkan / CPU 自动挑选）；
 3. 拉取默认模型 `gemma-3-4b-it-Q4_K_M.gguf` 到 `~/.nurvis/models`。
 
-| 内存 / 显存 | 推荐模型 |
-| --- | --- |
-| < 8 GB | `gemma-3-1b-it-Q4_K_M` / `Qwen2.5-1.5B-Instruct-Q4_K_M` |
-| 8 – 16 GB | `gemma-3-4b-it-Q4_K_M` *（默认）* |
-| 16 – 32 GB | `gemma-3-12b-it-Q4_K_M` / `Qwen2.5-7B-Instruct-Q4_K_M` |
-| > 32 GB | `gemma-3-27b-it-Q4_K_M` |
+| 内存 / 显存 | 推荐模型                                                |
+| ----------- | ------------------------------------------------------- |
+| < 8 GB      | `gemma-3-1b-it-Q4_K_M` / `Qwen2.5-1.5B-Instruct-Q4_K_M` |
+| 8 – 16 GB   | `gemma-3-4b-it-Q4_K_M` *（默认）*                       |
+| 16 – 32 GB  | `gemma-3-12b-it-Q4_K_M` / `Qwen2.5-7B-Instruct-Q4_K_M`  |
+| > 32 GB     | `gemma-3-27b-it-Q4_K_M`                                 |
 
 工具调用解析支持多格式开箱即用：**Standard / Qwen / GLM / Mistral / Gemma / GPT / Phi-4** 等。
 
@@ -153,43 +158,43 @@ flowchart LR
     T -->|无 tool_calls| M[memory] --> S[summarize]
 ```
 
-| 阶段 | 职责 |
-| --- | --- |
-| **context** | 装配运行上下文：Agent / Workspace / 工具白名单 / 模型参数 |
-| **history** | 拉取会话历史并按 token 预算裁剪 |
-| **prompt** | 组装 system prompt：人设 + 工作区 + 工具 schema + 长期记忆 |
-| **think** | 流式推理，逐 token 经 bus 推给前端，结束后解析 `tool_calls` |
-| **act** | 通过 Tool Registry 并行执行工具调用，注入 `Scope` |
-| **observe** | 工具结果回填为 `tool` 消息，决定是否再次 think |
-| **memory** | 落库本轮消息，按规则抽取长期记忆 |
-| **summarize** | 历史超阈值时生成滚动摘要压缩 token |
+| 阶段          | 职责                                                        |
+| ------------- | ----------------------------------------------------------- |
+| **context**   | 装配运行上下文：Agent / Workspace / 工具白名单 / 模型参数   |
+| **history**   | 拉取会话历史并按 token 预算裁剪                             |
+| **prompt**    | 组装 system prompt：人设 + 工作区 + 工具 schema + 长期记忆  |
+| **think**     | 流式推理，逐 token 经 bus 推给前端，结束后解析 `tool_calls` |
+| **act**       | 通过 Tool Registry 并行执行工具调用，注入 `Scope`           |
+| **observe**   | 工具结果回填为 `tool` 消息，决定是否再次 think              |
+| **memory**    | 落库本轮消息，按规则抽取长期记忆                            |
+| **summarize** | 历史超阈值时生成滚动摘要压缩 token                          |
 
 ## 🧱 核心抽象
 
-| 接口 | 角色 |
-| --- | --- |
-| **Provider** | LLM 抽象，默认 llama.cpp 本地实现，预留 OpenAI 兼容 |
-| **Tool** | 内置 / MCP / Skill 统一接口，注入 `Scope`（工作区 / agent / session） |
-| **Channel** | 对话渠道（微信 / QQ / 桌面），入站走 `channel.inbound` 事件 |
-| **Bus** | 泛型事件总线，串联 Loop 阶段 / 工具 / 渠道 / 调度器 |
-| **WorkspaceManager** | 本地目录工作区管理，文件类工具受根目录约束 |
-| **Memory** | 会话历史 + 长期记忆（preference / fact / feedback） |
+| 接口                 | 角色                                                                  |
+| -------------------- | --------------------------------------------------------------------- |
+| **Provider**         | LLM 抽象，默认 llama.cpp 本地实现，预留 OpenAI 兼容                   |
+| **Tool**             | 内置 / MCP / Skill 统一接口，注入 `Scope`（工作区 / agent / session） |
+| **Channel**          | 对话渠道（微信 / QQ / 桌面），入站走 `channel.inbound` 事件           |
+| **Bus**              | 泛型事件总线，串联 Loop 阶段 / 工具 / 渠道 / 调度器                   |
+| **WorkspaceManager** | 本地目录工作区管理，文件类工具受根目录约束                            |
+| **Memory**           | 会话历史 + 长期记忆（preference / fact / feedback）                   |
 
 > 所有能力都收敛为少量稳定接口，主流程只依赖接口。**新增模型供应商、工具、渠道时只实现接口并注册，无需改 Loop。**
 
 ## 🛠 技术栈
 
-| 维度 | 选型 |
-| --- | --- |
-| 语言 | Go 1.22+（适当使用泛型） |
-| 存储 | SQLite (`modernc.org/sqlite`，纯 Go 免 CGO) |
-| 网关 | WebSocket (`coder/websocket`) + JSON-RPC 2.0 |
+| 维度     | 选型                                                                                      |
+| -------- | ----------------------------------------------------------------------------------------- |
+| 语言     | Go 1.22+（适当使用泛型）                                                                  |
+| 存储     | SQLite (`modernc.org/sqlite`，纯 Go 免 CGO)                                               |
+| 网关     | WebSocket (`coder/websocket`) + JSON-RPC 2.0                                              |
 | LLM 推理 | [llama.cpp](https://github.com/ggerganov/llama.cpp) 动态库（`purego` 进程内调用，免 CGO） |
-| 模型来源 | HuggingFace Hub（`*.gguf`，断点续传 + 进度推送） |
-| MCP | 官方 `mcp-go` SDK（stdio / SSE / Streamable HTTP） |
-| 调度 | `robfig/cron/v3` |
-| 桌面 | Wails3 |
-| 前端 | React 19 + Vite + TypeScript + Tailwind CSS v4 + Zustand |
+| 模型来源 | HuggingFace Hub（`*.gguf`，断点续传 + 进度推送）                                          |
+| MCP      | 官方 `mcp-go` SDK（stdio / SSE / Streamable HTTP）                                        |
+| 调度     | `robfig/cron/v3`                                                                          |
+| 桌面     | Wails3                                                                                    |
+| 前端     | React 19 + Vite + TypeScript + Tailwind CSS v4 + Zustand                                  |
 
 ## 🚀 快速开始
 
@@ -253,18 +258,18 @@ nurvis/
 
 ## 🌐 Gateway 协议（节选）
 
-| 分组 | 方法 |
-| --- | --- |
-| 对话 | `chat.send`, `chat.history`, `chat.abort` |
-| 会话 | `sessions.list/create/delete/label` |
-| Agent | `agents.list/create/update/delete` |
-| 模型 | `models.list/library/pull/delete/recommend` |
-| 工具 | `tools.list`, `tools.builtin.toggle` |
-| MCP | `mcp.list/add/update/delete/grant` |
-| Skill | `skills.list/upload/toggle/grant` |
-| Channel | `channels.list/create/update/delete/status` |
-| Cron | `cron.list/create/delete/toggle/run/runs` |
-| 运行时 | `hardware.probe`, `runtime.status`, `runtime.ensure` |
+| 分组    | 方法                                                 |
+| ------- | ---------------------------------------------------- |
+| 对话    | `chat.send`, `chat.history`, `chat.abort`            |
+| 会话    | `sessions.list/create/delete/label`                  |
+| Agent   | `agents.list/create/update/delete`                   |
+| 模型    | `models.list/library/pull/delete/recommend`          |
+| 工具    | `tools.list`, `tools.builtin.toggle`                 |
+| MCP     | `mcp.list/add/update/delete/grant`                   |
+| Skill   | `skills.list/upload/toggle/grant`                    |
+| Channel | `channels.list/create/update/delete/status`          |
+| Cron    | `cron.list/create/delete/toggle/run/runs`            |
+| 运行时  | `hardware.probe`, `runtime.status`, `runtime.ensure` |
 
 事件推送：`agent.run.started/completed`、`agent.chunk`、`agent.stage`、`tool.call/result`、`runtime.lib.progress`、`models.pull.progress`、`channel.status`、`cron.fired`。
 

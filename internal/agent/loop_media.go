@@ -134,8 +134,8 @@ func (l *mediaLoop) Run(ctx context.Context) error {
 			NegativePrompt: negPrompt,
 			InitImagePath:  initImg,
 			OutputPath:     outFile + ".png",
-			Width:          int32(optInt(l.agent.Options, "image_width", 0)),
-			Height:         int32(optInt(l.agent.Options, "image_height", 0)),
+			Width:          int32(optInt(l.agent.Options, "image_width", 512)),
+			Height:         int32(optInt(l.agent.Options, "image_height", 512)),
 			SampleSteps:    int32(optInt(l.agent.Options, "sample_steps", 0)),
 			CFGScale:       float32(optFloat(l.agent.Options, "cfg_scale", 0)),
 			Seed:           int64(optInt(l.agent.Options, "seed", 0)),
@@ -265,23 +265,22 @@ func (l *mediaLoop) resolveModelConfig() (gosd.ModelConfig, error) {
 		DiffusionModelPath: expandUserPath(optString(opts, "diffusion_model")),
 		HighNoiseModelPath: expandUserPath(optString(opts, "high_noise")),
 		VAEPath:            expandUserPath(optString(opts, "vae")),
-		TextEncoderPath:    expandUserPath(l.agent.ChatModel),
+		TextEncoderPath:    expandUserPath(optString(opts, "text_encoder")),
 		ClipLPath:          expandUserPath(optString(opts, "clip_l")),
 		ClipGPath:          expandUserPath(optString(opts, "clip_g")),
 		LoraModelDir:       expandUserPath(optString(opts, "lora_dir")),
 		KeepClipOnCPU:      optBool(opts, "keep_clip_on_cpu"),
 		DiffusionFlashAttn: optBool(opts, "flash_attn"),
 	}
-	// Fall back: if the user only filled in agent.Model (a single GGUF), use
-	// it as the diffusion model path. agent.Model in the to-image / to-video
-	// world is best treated as the primary diffusion checkpoint.
-	if cfg.DiffusionModelPath == "" && cfg.LegacyModelPath == "" {
-		if l.agent.Model != "" {
-			cfg.DiffusionModelPath = l.agent.Model
-		}
-	}
+	// agent.Model is the chat-capable LLM (used by to-image / to-video agents
+	// to converse with the user). It is NOT a diffusion checkpoint and must
+	// not be used to populate DiffusionModelPath — that has to come from
+	// options.diffusion_model (or options.model_path for legacy SD/SDXL).
 	if cfg.DiffusionModelPath == "" && cfg.LegacyModelPath == "" {
 		return cfg, errors.New("agent options missing 'diffusion_model' (or 'model_path')")
+	}
+	if cfg.TextEncoderPath == "" {
+		cfg.TextEncoderPath = expandUserPath(l.agent.Model)
 	}
 	return cfg, nil
 }

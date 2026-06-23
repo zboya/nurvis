@@ -13,9 +13,6 @@ export interface Agent {
   // Runtime modality classification: 'to-text' (default) | 'to-image' | 'to-video'.
   // chat.send routes the message through different pipelines based on this.
   tag?: 'to-text' | 'to-image' | 'to-video' | string
-  // Chat-capable LLM used by to-image / to-video agents to converse with the user
-  // (prompt refinement, follow-up questions, summary). Unused for to-text.
-  chat_model?: string
   created_at: number
   updated_at: number
 }
@@ -30,7 +27,6 @@ export interface AgentInput {
   enabled?: boolean
   allowed_tools?: string[]
   tag?: 'to-text' | 'to-image' | 'to-video'
-  chat_model?: string
 }
 
 // Corresponds to AGENTS.md §13.3 projects table

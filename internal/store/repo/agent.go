@@ -27,11 +27,7 @@ type Agent struct {
 	// One of: "to-text" (default), "to-image", "to-video".
 	// Used by chat.send to choose between the standard llama loop and the
 	// gosd image/video pipelines.
-	Tag string `json:"tag,omitempty"`
-	// ChatModel is the chat-capable LLM used by to-image / to-video agents
-	// to converse with the user (e.g. to refine prompts or summarize the
-	// generated media). Ignored for to-text agents (which use Model).
-	ChatModel string    `json:"chat_model,omitempty"`
+	Tag       string    `json:"tag,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -89,7 +85,7 @@ type AgentRepo struct {
 func NewAgentRepo(db *sql.DB) *AgentRepo { return &AgentRepo{db: db} }
 
 const agentColumns = `id,name,role,system_prompt,provider_id,model,default_project,
-	options_json,max_rounds,enabled,tag,chat_model,created_at,updated_at`
+	options_json,max_rounds,enabled,tag,created_at,updated_at`
 
 // Create inserts a new Agent and returns a copy with ID/timestamps filled.
 func (r *AgentRepo) Create(ctx context.Context, a Agent) (*Agent, error) {
@@ -112,10 +108,10 @@ func (r *AgentRepo) Create(ctx context.Context, a Agent) (*Agent, error) {
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO agents(`+agentColumns+`)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Name, a.Role, a.SystemPrompt, nullStr(a.ProviderID),
 		a.Model, nullStr(a.DefaultProject), string(optJSON),
-		a.MaxRounds, boolInt(a.Enabled), a.Tag, nullStr(a.ChatModel),
+		a.MaxRounds, boolInt(a.Enabled), a.Tag,
 		a.CreatedAt.UnixMilli(), a.UpdatedAt.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("repo.agent: create: %w", err)
@@ -188,11 +184,11 @@ func (r *AgentRepo) Update(ctx context.Context, a Agent) (*Agent, error) {
 	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE agents SET name=?,role=?,system_prompt=?,provider_id=?,model=?,
-		  default_project=?,options_json=?,max_rounds=?,enabled=?,tag=?,chat_model=?,updated_at=?
+		  default_project=?,options_json=?,max_rounds=?,enabled=?,tag=?,updated_at=?
 		 WHERE id=?`,
 		a.Name, a.Role, a.SystemPrompt, nullStr(a.ProviderID), a.Model,
 		nullStr(a.DefaultProject), string(optJSON), a.MaxRounds, boolInt(a.Enabled), a.Tag,
-		nullStr(a.ChatModel), a.UpdatedAt.UnixMilli(), a.ID)
+		a.UpdatedAt.UnixMilli(), a.ID)
 	if err != nil {
 		return nil, fmt.Errorf("repo.agent: update: %w", err)
 	}
@@ -238,9 +234,8 @@ func scanAgentRow(scan func(...any) error) (*Agent, error) {
 	var enabled int
 	var providerID, defaultProject sql.NullString
 	var tag sql.NullString
-	var chatModel sql.NullString
 	if err := scan(&a.ID, &a.Name, &a.Role, &a.SystemPrompt, &providerID,
-		&a.Model, &defaultProject, &optJSON, &a.MaxRounds, &enabled, &tag, &chatModel,
+		&a.Model, &defaultProject, &optJSON, &a.MaxRounds, &enabled, &tag,
 		&createdMs, &updatedMs); err != nil {
 		return nil, fmt.Errorf("repo.agent: scan: %w", err)
 	}
@@ -251,7 +246,6 @@ func scanAgentRow(scan func(...any) error) (*Agent, error) {
 	if a.Tag == "" {
 		a.Tag = "to-text"
 	}
-	a.ChatModel = chatModel.String
 	a.CreatedAt = time.UnixMilli(createdMs)
 	a.UpdatedAt = time.UnixMilli(updatedMs)
 	_ = json.Unmarshal([]byte(optJSON), &a.Options)
