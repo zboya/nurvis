@@ -13,7 +13,7 @@ interface Props {
 // fixed (chat LLM + VAE + diffusion model).
 type TaskKey = 'chat' | 'image_chat' | 'image_vae' | 'image_diffusion'
 // Which agent a task contributes to. Used to decide when 对话宝 / 生图宝 can
-// be considered "ready" independently.
+// be considered "ready" independently. A `shared` task contributes to both.
 type Owner = 'chat_bot' | 'image_bot' | 'shared'
 
 interface Task {
@@ -39,6 +39,10 @@ const IMAGE_BOT_VAE_REPO = 'ffxvs/vae-flux'
 const IMAGE_BOT_VAE_FILE = 'ae.safetensors'
 const IMAGE_BOT_DIFFUSION_REPO = 'leejet/Z-Image-Turbo-GGUF'
 const IMAGE_BOT_DIFFUSION_FILE = 'z_image_turbo-Q6_K.gguf'
+
+const IMAGE_CHAT_REF = `${IMAGE_BOT_CHAT_REPO}/${IMAGE_BOT_CHAT_FILE}`
+const IMAGE_VAE_REF = `${IMAGE_BOT_VAE_REPO}/${IMAGE_BOT_VAE_FILE}`
+const IMAGE_DIFF_REF = `${IMAGE_BOT_DIFFUSION_REPO}/${IMAGE_BOT_DIFFUSION_FILE}`
 
 const CHAT_BOT_PRESET = {
   emoji: '🤖',
@@ -83,9 +87,11 @@ export function PreparingStep({ onComplete }: Props) {
   const [phase, setPhase] = useState<'detecting' | 'downloading' | 'finalizing' | 'done' | 'error'>('detecting')
   const [tasks, setTasks] = useState<Task[]>([])
   const [error, setError] = useState('')
-  // True once 对话宝 agent has been created on the backend. Required before
-  // we can offer the "先用对话宝聊起来" early-exit button.
+  // Agent ids — populated once each agent's backing models are all downloaded
+  // AND the corresponding agents.create call has succeeded. The early-exit
+  // buttons only light up after both conditions hold for that agent.
   const [chatBotAgentId, setChatBotAgentId] = useState<string | null>(null)
+  const [imageBotAgentId, setImageBotAgentId] = useState<string | null>(null)
   const setActiveAgent = useUiStore((s) => s.setActiveAgent)
 
   // EMA-smoothed download speed in bytes/sec, plus the most recent total
@@ -133,7 +139,6 @@ export function PreparingStep({ onComplete }: Props) {
   }, [])
 
   // Speed / ETA sampling loop. Runs every ~1s while there are active downloads.
-  // Uses exponential moving average to keep the displayed value stable.
   useEffect(() => {
     const timer = setInterval(() => {
       const list = tasksRef.current
@@ -150,7 +155,6 @@ export function PreparingStep({ onComplete }: Props) {
       const dt = (now - last.ts) / 1000
       if (dt <= 0) return
       const instant = Math.max(0, (totalDone - last.bytes) / dt)
-      // EMA: alpha=0.3 — react fast but smooth out noise from chunked writes.
       setSpeedBps((prev) => (prev <= 0 ? instant : prev * 0.7 + instant * 0.3))
     }, 1000)
     return () => clearInterval(timer)
@@ -163,11 +167,12 @@ export function PreparingStep({ onComplete }: Props) {
     void run()
   }, [])
 
-  // Watch chat-bot task: once its model is fully downloaded, create 对话宝
-  // (idempotency handled inside ensureChatBotAgent) so the early-exit button
-  // can light up. This runs independently of the rest of the flow.
+  // Per-agent readiness watchers — independent, idempotent. As soon as the
+  // models needed by 对话宝 (or 生图宝) reach 'success', we create the agent
+  // and store its id. This is what lights up the per-bot CTA buttons.
   useEffect(() => {
     if (chatBotAgentId) return
+    // 对话宝 needs exactly one model. Both 'chat_bot' and 'shared' satisfy it.
     const chatTask = tasks.find((t) => t.owner === 'chat_bot' || t.owner === 'shared')
     if (!chatTask || chatTask.status !== 'success') return
     let cancelled = false
@@ -178,13 +183,30 @@ export function PreparingStep({ onComplete }: Props) {
     return () => { cancelled = true }
   }, [tasks, chatBotAgentId])
 
+  useEffect(() => {
+    if (imageBotAgentId) return
+    // 生图宝 needs all 3 image refs ready. Tasks owned by 'image_bot' OR
+    // 'shared' (when the chat model overlaps) count toward this.
+    const imageBotTasks = tasks.filter((t) => t.owner === 'image_bot' || t.owner === 'shared')
+    if (imageBotTasks.length === 0) return
+    const allReady = [IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF].every((ref) => {
+      const t = tasks.find((x) => x.model === ref)
+      return t?.status === 'success'
+    })
+    if (!allReady) return
+    let cancelled = false
+    ;(async () => {
+      const id = await ensureImageBotAgent(IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF)
+      if (!cancelled && id) setImageBotAgentId(id)
+    })()
+    return () => { cancelled = true }
+  }, [tasks, imageBotAgentId])
+
   async function run() {
     try {
       setPhase('detecting')
-      // 1. Ensure runtime libs are downloaded (idempotent).
       try { await getWs().call('runtime.ensure') } catch { /* non-fatal */ }
 
-      // 2. Get hardware-recommended chat model for "对话宝".
       const rec = await getWs().call<ModelRecommend>('models.recommend')
       const chatRef =
         rec.default_model ||
@@ -192,36 +214,24 @@ export function PreparingStep({ onComplete }: Props) {
         'ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf'
       const { repo: chatRepo, file: chatFile } = splitRef(chatRef)
 
-      // Build task list. Note: image-bot's chat model may coincide with
-      // 对话宝's recommendation — in that case we deduplicate and mark
-      // owner = 'shared' so it counts toward both bots.
-      const imageChatRef = `${IMAGE_BOT_CHAT_REPO}/${IMAGE_BOT_CHAT_FILE}`
-      const imageVaeRef = `${IMAGE_BOT_VAE_REPO}/${IMAGE_BOT_VAE_FILE}`
-      const imageDiffRef = `${IMAGE_BOT_DIFFUSION_REPO}/${IMAGE_BOT_DIFFUSION_FILE}`
-
       const built: Task[] = [
         mkTask('chat', '对话宝 · 对话模型', 'chat_bot', chatRef, chatRepo, chatFile),
-        mkTask('image_chat', '生图宝 · 对话模型', 'image_bot', imageChatRef, IMAGE_BOT_CHAT_REPO, IMAGE_BOT_CHAT_FILE),
-        mkTask('image_vae', '生图宝 · VAE', 'image_bot', imageVaeRef, IMAGE_BOT_VAE_REPO, IMAGE_BOT_VAE_FILE),
-        mkTask('image_diffusion', '生图宝 · 扩散模型', 'image_bot', imageDiffRef, IMAGE_BOT_DIFFUSION_REPO, IMAGE_BOT_DIFFUSION_FILE),
+        mkTask('image_chat', '生图宝 · 对话模型', 'image_bot', IMAGE_CHAT_REF, IMAGE_BOT_CHAT_REPO, IMAGE_BOT_CHAT_FILE),
+        mkTask('image_vae', '生图宝 · VAE', 'image_bot', IMAGE_VAE_REF, IMAGE_BOT_VAE_REPO, IMAGE_BOT_VAE_FILE),
+        mkTask('image_diffusion', '生图宝 · 扩散模型', 'image_bot', IMAGE_DIFF_REF, IMAGE_BOT_DIFFUSION_REPO, IMAGE_BOT_DIFFUSION_FILE),
       ]
-      const seen = new Set<string>()
       const deduped: Task[] = []
       for (const t of built) {
         const existing = deduped.find((x) => x.model === t.model)
         if (existing) {
-          // Mark the existing task as shared so both bots wait on it.
           existing.owner = 'shared'
           continue
         }
-        seen.add(t.model)
         deduped.push(t)
       }
       setTasks(deduped)
       setPhase('downloading')
 
-      // 3. Kick off all downloads in parallel. The backend already short-circuits
-      //    when the file is already present locally, so this is safe on re-runs.
       await Promise.all(
         deduped.map((t) =>
           getWs()
@@ -239,10 +249,8 @@ export function PreparingStep({ onComplete }: Props) {
         ),
       )
 
-      // 4. Wait until all tasks reach terminal state (success / error).
       await waitAllDone(tasksRef)
 
-      // If anything failed, surface error and let the user retry.
       const failed = tasksRef.current.filter((t) => t.status === 'error')
       if (failed.length > 0) {
         setError(`部分模型下载失败：${failed.map((f) => f.label).join('、')}`)
@@ -250,12 +258,13 @@ export function PreparingStep({ onComplete }: Props) {
         return
       }
 
-      // 5. Create remaining default agents (对话宝 may already exist from the
-      //    early hook above). Then transition to done.
+      // Make sure both agents exist (idempotent — usually a no-op because the
+      // per-agent watchers already created them).
       setPhase('finalizing')
       const chatId = await ensureChatBotAgent(chatRef)
       if (chatId) setChatBotAgentId(chatId)
-      await ensureImageBotAgent(imageChatRef, imageVaeRef, imageDiffRef)
+      const imgId = await ensureImageBotAgent(IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF)
+      if (imgId) setImageBotAgentId(imgId)
 
       setPhase('done')
       setTimeout(() => onComplete(), 800)
@@ -265,37 +274,52 @@ export function PreparingStep({ onComplete }: Props) {
     }
   }
 
-  // Called when the user clicks "先用对话宝聊起来". Set the active agent so the
-  // chat view lands on it, then complete onboarding. The remaining downloads
-  // (image-bot models) continue in the background — `models.pull` is detached
-  // from the WS connection on the server side. We also fire-and-forget the
-  // image-bot agent creation; it runs once its three models all finish.
-  async function startWithChatBotEarly() {
-    if (!chatBotAgentId) return
-    setActiveAgent(chatBotAgentId)
-    scheduleImageBotCreationInBackground()
+  // Enter the main app immediately with one of the two bots already selected.
+  // Whichever bot is NOT yet ready will continue downloading in the background;
+  // its agent will be auto-created once all of its models finish (via a poll
+  // running detached from this component's lifecycle).
+  function enterAppWith(agentId: string) {
+    setActiveAgent(agentId)
+    if (!chatBotAgentId) scheduleChatBotCreationInBackground()
+    if (!imageBotAgentId) scheduleImageBotCreationInBackground()
     onComplete()
   }
 
-  // Spawn an async waiter that watches tasksRef (which keeps updating from the
-  // global WS event subscription registered in App root via useModelSubscription)
-  // and creates 生图宝 once all its models are present. Even though this
-  // component will be unmounted after onComplete(), the WS event subscription
-  // we set up earlier will be torn down too — so we instead poll `models.list`
-  // to detect completion. Kept minimal: idempotent agents.create-by-name.
-  function scheduleImageBotCreationInBackground() {
-    const imageChatRef = `${IMAGE_BOT_CHAT_REPO}/${IMAGE_BOT_CHAT_FILE}`
-    const imageVaeRef = `${IMAGE_BOT_VAE_REPO}/${IMAGE_BOT_VAE_FILE}`
-    const imageDiffRef = `${IMAGE_BOT_DIFFUSION_REPO}/${IMAGE_BOT_DIFFUSION_FILE}`
-    const needed = [imageChatRef, imageVaeRef, imageDiffRef]
+  // Background poll: keep watching models.list and create the agent once its
+  // model(s) are present. Both functions are idempotent thanks to
+  // findAgentByName guards inside ensure*Agent.
+  function scheduleChatBotCreationInBackground() {
+    // We need the recommended chat model ref. Take it from the live tasks
+    // table — by the time this fires, tasks have been populated.
+    const chatTask = tasksRef.current.find((t) => t.owner === 'chat_bot' || t.owner === 'shared')
+    const ref = chatTask?.model
+    if (!ref) return
     ;(async () => {
-      const deadline = Date.now() + 4 * 60 * 60 * 1000 // 4h ceiling
+      const deadline = Date.now() + 4 * 60 * 60 * 1000
+      while (Date.now() < deadline) {
+        try {
+          const res = await getWs().call<{ models?: Array<{ name: string }> }>('models.list')
+          const have = new Set((res.models ?? []).map((m) => m.name))
+          if (have.has(ref)) {
+            await ensureChatBotAgent(ref)
+            return
+          }
+        } catch { /* keep polling */ }
+        await new Promise((r) => setTimeout(r, 5000))
+      }
+    })()
+  }
+
+  function scheduleImageBotCreationInBackground() {
+    const needed = [IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF]
+    ;(async () => {
+      const deadline = Date.now() + 4 * 60 * 60 * 1000
       while (Date.now() < deadline) {
         try {
           const res = await getWs().call<{ models?: Array<{ name: string }> }>('models.list')
           const have = new Set((res.models ?? []).map((m) => m.name))
           if (needed.every((n) => have.has(n))) {
-            await ensureImageBotAgent(imageChatRef, imageVaeRef, imageDiffRef)
+            await ensureImageBotAgent(IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF)
             return
           }
         } catch { /* keep polling */ }
@@ -319,10 +343,14 @@ export function PreparingStep({ onComplete }: Props) {
     tasks.reduce((s, t) => s + (t.status === 'success' ? 100 : t.percent || 0), 0) / total,
   )
 
-  // ETA — only meaningful while still downloading and we have some speed signal.
   const etaSeconds = speedBps > 0 && remainingBytes > 0 ? remainingBytes / speedBps : 0
   const chatBotReady = !!chatBotAgentId
-  const imageBotPending = tasks.some((t) => t.owner !== 'chat_bot' && t.status !== 'success')
+  const imageBotReady = !!imageBotAgentId
+  // The "ready helpers" panel shows whenever *anything* is ready and we're
+  // still in active phases (any non-error phase before user exits).
+  const showReadyPanel =
+    (chatBotReady || imageBotReady) &&
+    (phase === 'downloading' || phase === 'finalizing')
 
   return (
     <div className="space-y-5 animate-slide-up">
@@ -331,7 +359,7 @@ export function PreparingStep({ onComplete }: Props) {
         <p className="text-sm text-text-primary font-medium">正在为你准备 AI 助手</p>
         <p className="text-xs text-text-muted mt-1 leading-relaxed">
           我们会自动下载「对话宝」和「生图宝」运行所需的模型（约数 GB），
-          下载时间取决于你的网络。请保持应用打开，下载支持断点续传，期间无需操作。
+          下载时间取决于你的网络。任意一个助手就绪后即可立即开始使用，另一个会在后台继续下载。
         </p>
       </div>
 
@@ -368,18 +396,35 @@ export function PreparingStep({ onComplete }: Props) {
             </div>
           )}
 
-          {/* Early-exit CTA: appears as soon as 对话宝 is usable. */}
-          {chatBotReady && imageBotPending && phase === 'downloading' && (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-3">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-text-primary">对话宝已就绪</p>
-                <p className="text-2xs text-text-muted mt-0.5">
-                  生图宝的模型仍在后台下载，你可以先开始聊天，完成后生图宝会自动启用
-                </p>
-              </div>
-              <Button variant="primary" size="md" onClick={startWithChatBotEarly}>
-                先用对话宝聊起来 →
-              </Button>
+          {/* Per-agent CTA: any ready bot can be entered right away. */}
+          {showReadyPanel && (
+            <div className="space-y-2">
+              {chatBotReady && (
+                <ReadyAgentCTA
+                  emoji={CHAT_BOT_PRESET.emoji}
+                  name={CHAT_BOT_PRESET.name}
+                  hint={
+                    imageBotReady
+                      ? '点此进入应用，开始聊天'
+                      : '生图宝仍在后台下载，完成后会自动启用'
+                  }
+                  buttonText="先用对话宝聊起来 →"
+                  onClick={() => chatBotAgentId && enterAppWith(chatBotAgentId)}
+                />
+              )}
+              {imageBotReady && (
+                <ReadyAgentCTA
+                  emoji={IMAGE_BOT_PRESET.emoji}
+                  name={IMAGE_BOT_PRESET.name}
+                  hint={
+                    chatBotReady
+                      ? '点此进入应用，开始创作'
+                      : '对话宝仍在后台下载，完成后会自动启用'
+                  }
+                  buttonText="先用生图宝创作 →"
+                  onClick={() => imageBotAgentId && enterAppWith(imageBotAgentId)}
+                />
+              )}
             </div>
           )}
 
@@ -467,11 +512,37 @@ export function PreparingStep({ onComplete }: Props) {
                 '基于 Z-Image-Turbo 扩散模型 + Flux VAE',
                 '由本地对话模型负责理解和改写你的描述',
               ]}
-              ready={!imageBotPending && tasks.length > 0}
+              ready={imageBotReady}
             />
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function ReadyAgentCTA({
+  emoji, name, hint, buttonText, onClick,
+}: {
+  emoji: string; name: string; hint: string; buttonText: string; onClick: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-3">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span className="text-xl shrink-0">{emoji}</span>
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-text-primary flex items-center gap-1.5">
+            {name}
+            <span className="text-2xs px-1.5 py-0.5 bg-success/15 text-success rounded-full font-normal">
+              已就绪
+            </span>
+          </p>
+          <p className="text-2xs text-text-muted mt-0.5 truncate">{hint}</p>
+        </div>
+      </div>
+      <Button variant="primary" size="md" onClick={onClick}>
+        {buttonText}
+      </Button>
     </div>
   )
 }
@@ -584,7 +655,6 @@ function mkTask(key: TaskKey, label: string, owner: Owner, model: string, repo: 
   return { key, label, owner, model, repo, file, status: 'pending', percent: 0, current: 0, total: 0 }
 }
 
-// Split a model ref string ("<repo>/<file>") into its repo / file parts.
 function splitRef(ref: string): { repo: string; file: string } {
   const parts = ref.split('/')
   if (parts.length < 2) return { repo: '', file: ref }
@@ -593,7 +663,6 @@ function splitRef(ref: string): { repo: string; file: string } {
   return { repo, file }
 }
 
-// Poll the tasks ref until every task is in a terminal state.
 async function waitAllDone(ref: { current: Task[] }): Promise<void> {
   const deadline = Date.now() + 2 * 60 * 60 * 1000
   while (Date.now() < deadline) {
@@ -603,10 +672,6 @@ async function waitAllDone(ref: { current: Task[] }): Promise<void> {
   }
 }
 
-// Idempotent agent creation: returns the existing agent id if one with the
-// same preset name already exists, otherwise creates a new one and returns
-// the new id. We key on name because onboarding always uses the canonical
-// 对话宝 / 生图宝 names.
 async function findAgentByName(name: string): Promise<Agent | null> {
   try {
     const res = await getWs().call<{ agents?: Agent[] }>('agents.list')

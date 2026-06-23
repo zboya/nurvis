@@ -147,3 +147,19 @@ type Engine interface {
 // ErrNotReady is returned when a generation call is made before the runtime
 // has been initialized, e.g. when the sd-server binary is missing.
 var ErrNotReady = errors.New("gosd: runtime not ready (call EnsureReady first)")
+
+// ModelResolver resolves a logical model identifier (a bare filename or a
+// HuggingFace "owner/repo/file" reference) to an absolute on-disk path.
+//
+// gosd uses this to translate the model paths embedded in ModelConfig before
+// spawning sd-server, so callers can configure agents with the same HF refs
+// they already use elsewhere (e.g. modelmgr.Pull keys) instead of having to
+// know where files actually live on disk.
+//
+// Implementations are expected to be idempotent for absolute paths: when
+// passed a path that already exists they should return it unchanged. The
+// canonical implementation is *modelmgr.manager, which satisfies this
+// interface directly.
+type ModelResolver interface {
+	Resolve(name string) (string, error)
+}

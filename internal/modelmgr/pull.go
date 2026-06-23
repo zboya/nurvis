@@ -5,41 +5,44 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
 
-	"github.com/forest6511/gdl"
 	"github.com/zboya/nurvis/internal/store/repo"
+	"github.com/zboya/nurvis/pkg/downloader"
 )
 
 const (
 	hfBaseURL = "https://huggingface.co"
 
-	// Tunables for the underlying multi-part downloader.
-	dlConcurrency  = 4
-	dlRetryAttempt = 3
+	// Multipart tuning. These trade off CDN-friendliness against
+	// throughput; values picked to match what curl/aria2 use in
+	// practice. Override via Options if a future caller needs it.
+	dlConcurrency = 4
+	dlChunkSize   = 32 * 1024 * 1024 // 32 MiB per chunk
+	dlMaxRetries  = 6
 
-	// progressMinInterval throttles how often we forward gdl progress events
-	// upstream (gateway throttles further on its own).
+	// progressMinInterval throttles how often we forward downloader
+	// progress events upstream (gateway throttles further on its own).
 	progressMinInterval = 200 * time.Millisecond
 )
 
 // Pull downloads ref.File from ref.Repo into <Dir>/<repo>/<file>.
 //
-// Implementation uses github.com/forest6511/gdl for concurrent multi-part
-// downloads with built-in cross-process resume: gdl writes directly into the
-// destination path and keeps a "<dest>.resume" sidecar file with the partial
-// download state, so a download interrupted in a previous process can be
-// continued the next time Pull is invoked for the same ref.
+// The transfer is performed by the in-house pkg/downloader, which
+// supports multi-part concurrent downloads with durable resume backed
+// by a sidecar file (<dest>.part.json). Bytes land in <dest>.part and
+// are atomically renamed onto <dest> only after a full size check
+// passes; an interrupted run can therefore be resumed safely on the
+// next Pull call.
 //
 // Side effects on the models registry (when a pull repo is wired in):
 //   - During "resolving" the HuggingFace single-model API is consulted and
 //     pipeline_tag / tags / modalities are persisted via UpsertMetadata.
-//   - On "success" local_path + size_bytes are persisted via MarkSuccess, so
-//     subsequent List calls can serve from DB only.
+//   - On "success" local_path + size_bytes are persisted via MarkSuccess,
+//     so subsequent List calls can serve from DB only.
 func (m *manager) Pull(ctx context.Context, ref ModelRef) (<-chan PullProgress, error) {
 	if ref.File == "" {
 		return nil, errors.New("modelmgr: pull: empty file")
@@ -52,7 +55,6 @@ func (m *manager) Pull(ctx context.Context, ref ModelRef) (<-chan PullProgress, 
 	go func() {
 		defer close(ch)
 		err := m.pullSync(ctx, ref, func(p PullProgress) {
-			// slog.Debug("pullSync", "model", ref.String(), "process", p)
 			select {
 			case ch <- p:
 			default:
@@ -73,7 +75,8 @@ func (m *manager) Pull(ctx context.Context, ref ModelRef) (<-chan PullProgress, 
 }
 
 func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProgress)) error {
-	emit(PullProgress{Model: ref.String(), Status: "resolving"})
+	model := ref.String()
+	emit(PullProgress{Model: model, Status: "resolving"})
 
 	url := fmt.Sprintf("%s/%s/resolve/main/%s", hfBaseURL, ref.Repo, ref.File)
 	destDir := filepath.Join(m.dir, filepath.FromSlash(ref.Repo))
@@ -87,85 +90,46 @@ func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProg
 		headers["Authorization"] = "Bearer " + token
 	}
 
-	model := ref.String()
-	var lastEmit time.Time
-	var lastReported atomic.Int64 // bytes last reported by either source
-	opts := &gdl.Options{
-		MaxConcurrency: dlConcurrency,
-		EnableResume:   true,
-		RetryAttempts:  dlRetryAttempt,
-		UserAgent:      "nurvis-modelmgr/1.0",
-		Headers:        headers,
-		CreateDirs:     true,
-		ProgressCallback: func(p gdl.Progress) {
-			now := time.Now()
-			// always forward the final 100% tick, throttle the rest
-			if p.Percentage < 100 && now.Sub(lastEmit) < progressMinInterval {
-				return
-			}
-			lastEmit = now
-			lastReported.Store(p.BytesDownloaded)
-			emit(PullProgress{
-				Model:   model,
-				Status:  "downloading",
-				Total:   p.TotalSize,
-				Current: p.BytesDownloaded,
-				Percent: p.Percentage,
-			})
-		},
+	// Fast path: dest already exists and looks complete. We don't know
+	// the authoritative size yet, but the downloader will probe and
+	// either confirm-then-no-op or detect a mismatch and restart. Emit
+	// an early tick so the UI doesn't sit at "resolving".
+	emit(PullProgress{Model: model, Status: "downloading"})
+
+	// Throttle progress emissions: chunk callbacks can fire very
+	// frequently (every 256 KiB), but the UI only needs ~5 Hz.
+	var lastEmit atomic.Int64 // unix nanos
+	progressCB := func(p downloader.Progress) {
+		nowNs := time.Now().UnixNano()
+		last := lastEmit.Load()
+		// Always emit the final 100% tick; throttle the rest.
+		if p.Percent < 100 && nowNs-last < int64(progressMinInterval) {
+			return
+		}
+		if !lastEmit.CompareAndSwap(last, nowNs) {
+			return
+		}
+		emit(PullProgress{
+			Model:   model,
+			Status:  "downloading",
+			Total:   p.Total,
+			Current: p.Downloaded,
+			Percent: p.Percent,
+		})
 	}
 
-	// Probe Content-Length up front so the polling fallback below has a
-	// total to compute percentage against. HF returns 302 → CDN; a GET with
-	// immediate close is more reliable than HEAD (which often 400s on HF).
-	totalSize := probeContentLength(ctx, url, headers)
+	opts := downloader.Options{
+		Concurrency:      dlConcurrency,
+		ChunkSize:        dlChunkSize,
+		MaxRetries:       dlMaxRetries,
+		Headers:          headers,
+		UserAgent:        "nurvis-modelmgr/1.0",
+		Progress:         progressCB,
+		MinMultipartSize: 16 * 1024 * 1024, // skip multipart for tiny configs/tokenizers
+	}
 
-	slog.Info("start downloading", "url", url, "probedSize", totalSize)
-	// Emit an initial downloading tick so the UI can leave the
-	// "resolving" state even before gdl produces its first progress
-	// callback (which can take a while when renegotiating resume).
-	emit(PullProgress{Model: model, Status: "downloading", Total: totalSize})
-
-	// Fallback progress poller: gdl's ProgressCallback can be silent for
-	// long stretches when it falls back to single-stream mode (HF CDN
-	// returning 400 on HEAD/Range probes). Stat the destination file
-	// periodically so the UI keeps moving regardless.
-	pollCtx, pollCancel := context.WithCancel(ctx)
-	defer pollCancel()
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-pollCtx.Done():
-				return
-			case <-ticker.C:
-				info, err := os.Stat(dest)
-				if err != nil {
-					continue
-				}
-				cur := info.Size()
-				if cur <= lastReported.Load() {
-					continue // gdl's callback is fresher
-				}
-				lastReported.Store(cur)
-				var pct float64
-				if totalSize > 0 {
-					pct = float64(cur) / float64(totalSize) * 100
-				}
-				emit(PullProgress{
-					Model:   model,
-					Status:  "downloading",
-					Total:   totalSize,
-					Current: cur,
-					Percent: pct,
-				})
-			}
-		}
-	}()
-
-	stats, err := gdl.DownloadWithOptions(ctx, url, dest, opts)
-	pollCancel()
+	slog.Info("modelmgr: pull starting", "url", url, "dest", dest)
+	stats, err := downloader.Download(ctx, url, dest, opts)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -180,9 +144,30 @@ func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProg
 		return fmt.Errorf("stat dest: %w", statErr)
 	}
 	total := info.Size()
-	if stats != nil && stats.TotalSize > 0 {
-		total = stats.TotalSize
+	if stats != nil && stats.Total > 0 {
+		total = stats.Total
 	}
+
+	// pkg/downloader already guarantees the dest size equals the
+	// authoritative Content-Length before performing the atomic
+	// rename, so reaching this line means the file is good. Keep the
+	// log for observability.
+	slog.Info("modelmgr: pull done",
+		"model", model, "size", info.Size(),
+		"resumed", stats != nil && stats.Resumed,
+		"multipart", stats != nil && stats.Multipart,
+		"retries", func() int {
+			if stats == nil {
+				return 0
+			}
+			return stats.Retries
+		}(),
+		"duration", func() time.Duration {
+			if stats == nil {
+				return 0
+			}
+			return stats.Duration
+		}())
 
 	// Persist GGUF metadata + local path so List can serve from DB only.
 	m.persistSuccessMeta(ctx, ref, dest, total)
@@ -195,30 +180,6 @@ func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProg
 		Percent: 100,
 	})
 	return nil
-}
-
-// probeContentLength tries to discover the final size of url via a HEAD
-// request. Returns 0 on any error — callers should treat 0 as "unknown".
-func probeContentLength(ctx context.Context, url string, headers map[string]string) int64 {
-	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(pctx, http.MethodHead, url, nil)
-	if err != nil {
-		return 0
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("User-Agent", "nurvis-modelmgr/1.0")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return 0
-	}
-	return resp.ContentLength
 }
 
 // fetchAndPersistHFMetadata calls the HF single-model API and writes the

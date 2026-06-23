@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -28,6 +29,10 @@ import (
 type runtimeImpl struct {
 	libPath  string
 	progress ProgressFunc
+	// resolver translates HF refs / bare filenames inside ModelConfig into
+	// absolute on-disk paths before LoadEngine spawns sd-server. May be nil;
+	// when nil, paths are passed through unchanged (only ~ expansion happens).
+	resolver ModelResolver
 
 	mu      sync.Mutex
 	ready   bool
@@ -35,9 +40,21 @@ type runtimeImpl struct {
 	engines map[string]*engineImpl // fingerprint(cfg) → engine
 }
 
+// Option configures the Runtime at construction time.
+type Option func(*runtimeImpl)
+
+// WithResolver wires a ModelResolver (typically modelmgr.Manager) that gosd
+// uses to translate HF refs / bare filenames into absolute paths before
+// spawning sd-server. Without a resolver, all ModelConfig path fields are
+// passed through to sd-server unchanged (after ~ expansion).
+func WithResolver(r ModelResolver) Option {
+	return func(rt *runtimeImpl) { rt.resolver = r }
+}
+
 // New constructs a Runtime rooted at libPath (or NURVIS_GOSD_LIB / GOSD_DYN_LIB
-// / DefaultLibDir() in that order). progress may be nil.
-func New(libPath string, progress ProgressFunc) Runtime {
+// / DefaultLibDir() in that order). progress may be nil. Pass WithResolver to
+// enable HF-ref → absolute-path translation inside LoadEngine.
+func New(libPath string, progress ProgressFunc, opts ...Option) Runtime {
 	if libPath == "" {
 		libPath = os.Getenv("NURVIS_GOSD_LIB")
 	}
@@ -47,11 +64,15 @@ func New(libPath string, progress ProgressFunc) Runtime {
 	if libPath == "" {
 		libPath = DefaultLibDir()
 	}
-	return &runtimeImpl{
+	rt := &runtimeImpl{
 		libPath:  libPath,
 		progress: progress,
 		engines:  make(map[string]*engineImpl),
 	}
+	for _, o := range opts {
+		o(rt)
+	}
+	return rt
 }
 
 // DefaultLibDir returns ~/.nurvis/lib/sd (or /tmp/.nurvis/lib/sd if the home
@@ -126,6 +147,11 @@ func (r *runtimeImpl) EnsureReady(ctx context.Context) error {
 // LoadEngine returns (or builds) an engine for the given config. Engines are
 // cached by fingerprint so two agents with identical model paths share one
 // underlying sd-server child process.
+//
+// Before fingerprinting, every path field in cfg is run through the
+// configured ModelResolver (if any). This lets callers pass HuggingFace
+// "<owner>/<repo>/<file>" refs (e.g. the same identifiers used by modelmgr)
+// instead of absolute on-disk paths.
 func (r *runtimeImpl) LoadEngine(cfg ModelConfig) (Engine, error) {
 	r.mu.Lock()
 	if !r.ready {
@@ -136,7 +162,16 @@ func (r *runtimeImpl) LoadEngine(cfg ModelConfig) (Engine, error) {
 		r.mu.Unlock()
 		return nil, errors.New("gosd: runtime closed")
 	}
-	fp := fingerprintConfig(cfg)
+	resolver := r.resolver
+	r.mu.Unlock()
+
+	resolved, err := resolveConfigPaths(cfg, resolver)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	fp := fingerprintConfig(resolved)
 	if eng, ok := r.engines[fp]; ok {
 		r.mu.Unlock()
 		return eng, nil
@@ -153,7 +188,7 @@ func (r *runtimeImpl) LoadEngine(cfg ModelConfig) (Engine, error) {
 		return nil, fmt.Errorf("gosd: pick port: %w", err)
 	}
 	// Spawning a sd-server child can take seconds (model load) — release the lock.
-	eng, err := newEngine(bin, "127.0.0.1", port, cfg)
+	eng, err := newEngine(bin, "127.0.0.1", port, resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -170,6 +205,60 @@ func (r *runtimeImpl) LoadEngine(cfg ModelConfig) (Engine, error) {
 	}
 	r.engines[fp] = eng
 	return eng, nil
+}
+
+// resolveConfigPaths walks every path-bearing field of cfg and passes it
+// through resolver.Resolve. Empty fields are skipped. When resolver is nil,
+// cfg is returned unchanged. A resolver error on any required field aborts
+// the load with a descriptive error; LoraModelDir is treated as best-effort
+// since it may legitimately point at a directory that the resolver doesn't
+// manage.
+func resolveConfigPaths(cfg ModelConfig, resolver ModelResolver) (ModelConfig, error) {
+	if resolver == nil {
+		return cfg, nil
+	}
+	resolve := func(field, in string) (string, error) {
+		if strings.TrimSpace(in) == "" {
+			return in, nil
+		}
+		out, err := resolver.Resolve(in)
+		if err != nil {
+			return in, fmt.Errorf("gosd: resolve %s %q: %w", field, in, err)
+		}
+		return out, nil
+	}
+
+	var err error
+	if cfg.LegacyModelPath, err = resolve("model_path", cfg.LegacyModelPath); err != nil {
+		return cfg, err
+	}
+	if cfg.DiffusionModelPath, err = resolve("diffusion_model", cfg.DiffusionModelPath); err != nil {
+		return cfg, err
+	}
+	if cfg.HighNoiseModelPath, err = resolve("high_noise", cfg.HighNoiseModelPath); err != nil {
+		return cfg, err
+	}
+	if cfg.VAEPath, err = resolve("vae", cfg.VAEPath); err != nil {
+		return cfg, err
+	}
+	if cfg.TextEncoderPath, err = resolve("text_encoder", cfg.TextEncoderPath); err != nil {
+		return cfg, err
+	}
+	if cfg.ClipLPath, err = resolve("clip_l", cfg.ClipLPath); err != nil {
+		return cfg, err
+	}
+	if cfg.ClipGPath, err = resolve("clip_g", cfg.ClipGPath); err != nil {
+		return cfg, err
+	}
+	// LoraModelDir is best-effort: it's a directory, not a file the resolver
+	// is guaranteed to know about. Swallow lookup errors and keep the user
+	// value as-is so absolute / external dirs still work.
+	if cfg.LoraModelDir != "" {
+		if out, lerr := resolver.Resolve(cfg.LoraModelDir); lerr == nil {
+			cfg.LoraModelDir = out
+		}
+	}
+	return cfg, nil
 }
 
 func (r *runtimeImpl) Close() error {

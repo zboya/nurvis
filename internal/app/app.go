@@ -210,7 +210,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			"status":  status,
 			"percent": percent,
 		})
-	})
+	}, gosd.WithResolver(models))
 	a.gosdRT = gosdRT
 	mediaOutDir := filepath.Join(cfg.DataDir, "outputs")
 	// Allow user override via settings.media_output_dir
