@@ -211,6 +211,21 @@ func (m *Methods) handleChatHistory(ctx context.Context, _ *Conn, params json.Ra
 				if rec.mediaJSON != "" {
 					_ = json.Unmarshal([]byte(rec.mediaJSON), &media)
 				}
+				// The URL persisted into media_json points to the preview
+				// registry (in-memory, TTL-bound), so after a restart or
+				// 6h expiry it returns 404. Re-issue a fresh URL from the
+				// stable local path on every history read; the registry
+				// reuses the existing token for the same directory.
+				if m.Agents != nil && m.Agents.MediaPreviewURL != nil {
+					for k := range media {
+						if media[k].Path == "" {
+							continue
+						}
+						if u, err := m.Agents.MediaPreviewURL(media[k].Path); err == nil {
+							media[k].URL = u
+						}
+					}
+				}
 				msgs = append(msgs, msg{
 					ID:        rec.id,
 					Role:      rec.role,
