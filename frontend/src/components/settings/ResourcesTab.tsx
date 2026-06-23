@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { Browser } from '@wailsio/runtime'
 import { getWs } from '../../lib/ws'
 import { SelectDirectory } from '../../../bindings/github.com/zboya/nurvis/cmd/nurvis-desktop/service'
 import { Button, Input } from '../ui'
@@ -218,14 +219,18 @@ export function ResourcesTab() {
                     </p>
                   </div>
                   {!e.is_dir && e.url && (
-                    <a
-                      href={e.url}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!e.url) return
+                        Browser.OpenURL(e.url).catch((err) =>
+                          console.error('[resources] OpenURL failed', err),
+                        )
+                      }}
                       className="text-2xs text-accent hover:underline shrink-0"
                     >
                       打开
-                    </a>
+                    </button>
                   )}
                 </li>
               ))}

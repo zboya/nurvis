@@ -102,10 +102,14 @@ export default function App() {
   }, [])
 
   const handleOnboardingComplete = useCallback(async () => {
-    // Quick check: if agents exist, consider onboarded
+    // If neither an agent exists nor a pending creation is queued, the
+    // onboarding hasn't really produced anything actionable yet — stay on
+    // the wizard. Otherwise mark onboarded so the user lands in the app.
     try {
       const res = await getWs().call<{ agents?: unknown[] }>('agents.list')
-      if ((res.agents?.length ?? 0) === 0) {
+      const hasAgent = (res.agents?.length ?? 0) > 0
+      const hasPending = useUiStore.getState().pendingAgents.length > 0
+      if (!hasAgent && !hasPending) {
         setOnboardedLocal(false)
         return
       }

@@ -93,6 +93,8 @@ export function PreparingStep({ onComplete }: Props) {
   const [chatBotAgentId, setChatBotAgentId] = useState<string | null>(null)
   const [imageBotAgentId, setImageBotAgentId] = useState<string | null>(null)
   const setActiveAgent = useUiStore((s) => s.setActiveAgent)
+  const addPendingAgent = useUiStore((s) => s.addPendingAgent)
+  const removePendingAgent = useUiStore((s) => s.removePendingAgent)
 
   // EMA-smoothed download speed in bytes/sec, plus the most recent total
   // remaining bytes — used to render the ETA hint.
@@ -285,46 +287,71 @@ export function PreparingStep({ onComplete }: Props) {
     onComplete()
   }
 
+  // Skip the wait entirely, even if no bot is ready yet. Enter the main app
+  // with whichever bot is ready (if any) selected; all remaining bots become
+  // "pending" and will be created in the background once their models finish.
+  function skipAndEnter() {
+    const firstReady = chatBotAgentId || imageBotAgentId
+    if (firstReady) setActiveAgent(firstReady)
+    if (!chatBotAgentId) scheduleChatBotCreationInBackground()
+    if (!imageBotAgentId) scheduleImageBotCreationInBackground()
+    onComplete()
+  }
+
   // Background poll: keep watching models.list and create the agent once its
   // model(s) are present. Both functions are idempotent thanks to
-  // findAgentByName guards inside ensure*Agent.
+  // findAgentByName guards inside ensure*Agent. They also register the agent
+  // as "pending" in the global ui-store so the main app can surface a hint
+  // until creation succeeds.
   function scheduleChatBotCreationInBackground() {
-    // We need the recommended chat model ref. Take it from the live tasks
-    // table — by the time this fires, tasks have been populated.
     const chatTask = tasksRef.current.find((t) => t.owner === 'chat_bot' || t.owner === 'shared')
     const ref = chatTask?.model
     if (!ref) return
+    addPendingAgent({
+      key: 'chat_bot',
+      emoji: CHAT_BOT_PRESET.emoji,
+      name: CHAT_BOT_PRESET.name,
+      hint: '对话模型仍在下载，下载完成后将自动创建',
+    })
     ;(async () => {
       const deadline = Date.now() + 4 * 60 * 60 * 1000
       while (Date.now() < deadline) {
         try {
-          const res = await getWs().call<{ models?: Array<{ name: string }> }>('models.list')
-          const have = new Set((res.models ?? []).map((m) => m.name))
-          if (have.has(ref)) {
-            await ensureChatBotAgent(ref)
+          if (await modelInstalled(ref)) {
+            const id = await ensureChatBotAgent(ref)
+            if (id) removePendingAgent('chat_bot')
             return
           }
         } catch { /* keep polling */ }
         await new Promise((r) => setTimeout(r, 5000))
       }
+      // Timed out — drop the pending marker so the user isn't misled forever.
+      removePendingAgent('chat_bot')
     })()
   }
 
   function scheduleImageBotCreationInBackground() {
     const needed = [IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF]
+    addPendingAgent({
+      key: 'image_bot',
+      emoji: IMAGE_BOT_PRESET.emoji,
+      name: IMAGE_BOT_PRESET.name,
+      hint: '扩散模型与 VAE 仍在下载，完成后将自动创建',
+    })
     ;(async () => {
       const deadline = Date.now() + 4 * 60 * 60 * 1000
       while (Date.now() < deadline) {
         try {
-          const res = await getWs().call<{ models?: Array<{ name: string }> }>('models.list')
-          const have = new Set((res.models ?? []).map((m) => m.name))
-          if (needed.every((n) => have.has(n))) {
-            await ensureImageBotAgent(IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF)
+          const checks = await Promise.all(needed.map((n) => modelInstalled(n)))
+          if (checks.every(Boolean)) {
+            const id = await ensureImageBotAgent(IMAGE_CHAT_REF, IMAGE_VAE_REF, IMAGE_DIFF_REF)
+            if (id) removePendingAgent('image_bot')
             return
           }
         } catch { /* keep polling */ }
         await new Promise((r) => setTimeout(r, 5000))
       }
+      removePendingAgent('image_bot')
     })()
   }
 
@@ -483,7 +510,25 @@ export function PreparingStep({ onComplete }: Props) {
           </div>
           <div className="flex gap-2">
             <Button variant="primary" onClick={retry}>重试</Button>
+            <Button variant="ghost" onClick={skipAndEnter}>跳过下载，先进入应用</Button>
           </div>
+        </div>
+      )}
+
+      {/* Always-available escape hatch: let the user enter the app even if
+          nothing finished yet. Hidden once everything is genuinely done. */}
+      {phase !== 'done' && phase !== 'error' && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-tertiary/30 px-3.5 py-2.5">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-text-primary">不想等下载？</p>
+            <p className="text-2xs text-text-muted mt-0.5 leading-relaxed">
+              可以直接进入应用，未完成的模型会在后台继续下载，
+              对应的智能体将在下载完成后自动创建。
+            </p>
+          </div>
+          <Button variant="ghost" size="md" onClick={skipAndEnter} className="shrink-0">
+            跳过，先进入 →
+          </Button>
         </div>
       )}
 
@@ -670,6 +715,27 @@ async function waitAllDone(ref: { current: Task[] }): Promise<void> {
     if (list.length > 0 && list.every((t) => t.status === 'success' || t.status === 'error')) return
     await new Promise((r) => setTimeout(r, 400))
   }
+}
+
+// modelInstalled checks whether a given "repo/file" reference is present in
+// the local model registry. `models.list` returns rows whose `name` field is
+// just the file basename, so a naive `have.has("repo/file")` always misses.
+// We accept either form: prefer matching by `repo+'/'+file`, and fall back to
+// matching by file basename for legacy rows that didn't persist the repo.
+async function modelInstalled(ref: string): Promise<boolean> {
+  const file = ref.split('/').pop() ?? ref
+  const res = await getWs().call<{ models?: Array<{ name?: string; repo?: string; file?: string }> }>(
+    'models.list',
+  )
+  for (const m of res.models ?? []) {
+    const repoFile = m.repo && m.file ? `${m.repo}/${m.file}` : ''
+    if (repoFile === ref) return true
+    // Fall back to file-basename match (only safe when refs across different
+    // repos don't share filenames, which is true for our onboarding set).
+    if (!m.repo && (m.name === file || m.file === file)) return true
+    if (m.name === file && m.file === file) return true
+  }
+  return false
 }
 
 async function findAgentByName(name: string): Promise<Agent | null> {
