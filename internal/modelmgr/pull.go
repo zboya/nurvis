@@ -83,7 +83,7 @@ func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProg
 	dest := filepath.Join(destDir, ref.File)
 
 	headers := map[string]string{}
-	if token := os.Getenv("HF_TOKEN"); token != "" {
+	if token := m.resolveHFToken(ctx); token != "" {
 		headers["Authorization"] = "Bearer " + token
 	}
 
@@ -234,7 +234,7 @@ func (m *manager) fetchAndPersistHFMetadata(ctx context.Context, ref ModelRef) {
 	mctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	detail, err := FetchModelDetail(mctx, ref.Repo)
+	detail, err := fetchModelDetailWithToken(mctx, ref.Repo, m.resolveHFToken(mctx))
 	if err != nil {
 		slog.Warn("modelmgr: hf detail fetch failed (continuing)", "repo", ref.Repo, "err", err)
 		return

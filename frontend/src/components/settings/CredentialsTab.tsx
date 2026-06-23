@@ -61,11 +61,15 @@ export function CredentialsTab() {
   const submit = async () => {
     if (!form.name.trim()) { setFormError('请填写名称'); return }
     if (!form.api_token.trim() && !editTarget) { setFormError('请填写 API Token'); return }
-    if (!form.account_id.trim() && !editTarget) { setFormError('请填写 Account ID'); return }
+    if (form.provider === 'cloudflare' && !form.account_id.trim() && !editTarget) {
+      setFormError('请填写 Account ID'); return
+    }
 
     const config: Record<string, string> = {}
     if (form.api_token.trim()) config.api_token = form.api_token.trim()
-    if (form.account_id.trim()) config.account_id = form.account_id.trim()
+    if (form.provider === 'cloudflare' && form.account_id.trim()) {
+      config.account_id = form.account_id.trim()
+    }
 
     setSaving(true)
     setFormError(null)
@@ -106,7 +110,9 @@ export function CredentialsTab() {
   }
 
   const providerLabel = (p: string) =>
-    p === 'cloudflare' ? 'Cloudflare Pages' : p
+    p === 'cloudflare' ? 'Cloudflare Pages'
+    : p === 'huggingface' ? 'HuggingFace'
+    : p
 
   return (
     <div className="space-y-4">
@@ -138,6 +144,7 @@ export function CredentialsTab() {
                 className="w-full bg-surface-tertiary border border-border/60 rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/60 disabled:opacity-60"
               >
                 <option value="cloudflare">Cloudflare Pages</option>
+                <option value="huggingface">HuggingFace</option>
               </select>
             </div>
 
@@ -179,6 +186,24 @@ export function CredentialsTab() {
               </>
             )}
 
+            {form.provider === 'huggingface' && (
+              <>
+                <div>
+                  <label className="text-2xs text-text-muted block mb-1">Access Token</label>
+                  <input
+                    value={form.api_token}
+                    onChange={(e) => setForm({ ...form, api_token: e.target.value })}
+                    placeholder={editTarget ? '留空保持不变' : 'hf_xxx... (HuggingFace → Settings → Access Tokens)'}
+                    type="password"
+                    className="w-full bg-surface-tertiary border border-border/60 rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent/60 font-mono"
+                  />
+                </div>
+                <p className="text-2xs text-text-muted leading-relaxed">
+                  💡 用于拉取受限或限流的 HuggingFace 模型。在 <span className="font-mono">huggingface.co/settings/tokens</span> 创建 Read 权限的 Token 即可。
+                </p>
+              </>
+            )}
+
             {formError && <p className="text-xs text-error">{formError}</p>}
 
             <div className="flex gap-2 pt-1">
@@ -201,7 +226,7 @@ export function CredentialsTab() {
         <div className="text-center py-10">
           <p className="text-3xl mb-2">🔑</p>
           <p className="text-sm text-text-muted">暂无凭证配置</p>
-          <p className="text-2xs text-text-muted mt-1">添加 Cloudflare 凭证后，Agent 可使用 publish_cloudflare_pages 工具发布网站</p>
+          <p className="text-2xs text-text-muted mt-1">添加凭证后，可用于发布静态网站（Cloudflare）或拉取受限模型（HuggingFace）</p>
         </div>
       ) : (
         <Card>

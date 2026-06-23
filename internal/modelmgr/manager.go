@@ -125,15 +125,32 @@ func ParseRef(s string) (ModelRef, error) {
 
 // manager is the file-system Manager implementation.
 type manager struct {
-	dir  string
-	pull *repo.ModelRepo // optional; when nil, List falls back to filesystem walk
+	dir       string
+	pull      *repo.ModelRepo // optional; when nil, List falls back to filesystem walk
+	tokenFunc TokenProviderFunc
+}
+
+// TokenProviderFunc returns a HuggingFace access token (or empty string) for
+// authenticating downloads and metadata calls. It is consulted lazily on each
+// HTTP request so the user can update the token via the credentials UI
+// without restarting the daemon.
+type TokenProviderFunc func(ctx context.Context) string
+
+// Option configures the Manager at construction time.
+type Option func(*manager)
+
+// WithTokenProvider wires a HuggingFace token provider (e.g. backed by the
+// site credentials store). When set, the returned token takes precedence over
+// the HF_TOKEN environment variable.
+func WithTokenProvider(fn TokenProviderFunc) Option {
+	return func(m *manager) { m.tokenFunc = fn }
 }
 
 // New creates a Manager rooted at dir. If dir is empty, falls back to
 // $NURVIS_MODELS_DIR or ~/.nurvis/models. The pull repo is optional but
 // recommended: with it List/Pull share the models table as the
 // installed-model registry.
-func New(dir string, pullRepo *repo.ModelRepo) Manager {
+func New(dir string, pullRepo *repo.ModelRepo, opts ...Option) Manager {
 	if dir == "" {
 		dir = os.Getenv("NURVIS_MODELS_DIR")
 	}
@@ -145,7 +162,22 @@ func New(dir string, pullRepo *repo.ModelRepo) Manager {
 			dir = filepath.Join(os.TempDir(), ".nurvis", "models")
 		}
 	}
-	return &manager{dir: dir, pull: pullRepo}
+	m := &manager{dir: dir, pull: pullRepo}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
+}
+
+// resolveHFToken returns the HuggingFace token to use for outbound requests.
+// Precedence: configured TokenProvider (e.g. credentials store) > HF_TOKEN env.
+func (m *manager) resolveHFToken(ctx context.Context) string {
+	if m.tokenFunc != nil {
+		if tok := strings.TrimSpace(m.tokenFunc(ctx)); tok != "" {
+			return tok
+		}
+	}
+	return strings.TrimSpace(os.Getenv("HF_TOKEN"))
 }
 
 func (m *manager) Dir() string { return m.dir }

@@ -144,7 +144,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	// ── 5. modelmgr ─────────────────────────────────────────
 	slog.Info("app: [5/13] initializing model manager", "models_dir", cfg.ModelsDir)
 	modelRepo := repo.NewModelRepo(s.DB())
-	models := modelmgr.New(cfg.ModelsDir, modelRepo)
+	credRepo := repo.NewSiteCredentialRepo(s.DB())
+	models := modelmgr.New(cfg.ModelsDir, modelRepo,
+		modelmgr.WithTokenProvider(huggingfaceTokenFromCreds(credRepo)),
+	)
 	a.models = models
 
 	// ── 6. provider ─────────────────────────────────────────
@@ -166,7 +169,6 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	previewReg := preview.NewRegistry(0)
 	a.previewRegistry = previewReg
 	localBase := fmt.Sprintf("http://127.0.0.1%s", cfg.ListenAddr)
-	credRepo := repo.NewSiteCredentialRepo(s.DB())
 	chanToolAdapter := &channelToolAdapter{}
 	cronToolAdpt := &cronToolAdapter{}
 	tools.RegisterAll(registry, previewReg, localBase, credRepo, chanToolAdapter, cronToolAdpt)

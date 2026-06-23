@@ -27,6 +27,12 @@ type HFModelDetail struct {
 // repository. The endpoint is unauthenticated for public models; if HF_TOKEN
 // is set we forward it to lift rate limits.
 func FetchModelDetail(ctx context.Context, repo string) (*HFModelDetail, error) {
+	return fetchModelDetailWithToken(ctx, repo, strings.TrimSpace(os.Getenv("HF_TOKEN")))
+}
+
+// fetchModelDetailWithToken is the token-aware variant used internally so the
+// manager can forward a credential-store token.
+func fetchModelDetailWithToken(ctx context.Context, repo, token string) (*HFModelDetail, error) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return nil, fmt.Errorf("modelmgr: empty repo")
@@ -37,7 +43,7 @@ func FetchModelDetail(ctx context.Context, repo string) (*HFModelDetail, error) 
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "nurvis-modelmgr/1.0")
-	if token := os.Getenv("HF_TOKEN"); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -55,7 +54,7 @@ func (m *manager) ListLibrary(ctx context.Context, search string, limit int) ([]
 	req = req.WithContext(ctx)
 
 	// 可选：带上 token 提升限额（私有/受限模型必须）
-	if token := os.Getenv("HF_TOKEN"); token != "" {
+	if token := m.resolveHFToken(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("User-Agent", "go-hf-client/1.0")
@@ -99,7 +98,7 @@ func (m *manager) ListRepoFiles(ctx context.Context, repo string) ([]RepoFile, e
 		return nil, err
 	}
 	req = req.WithContext(ctx)
-	if token := os.Getenv("HF_TOKEN"); token != "" {
+	if token := m.resolveHFToken(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("User-Agent", "go-hf-client/1.0")
