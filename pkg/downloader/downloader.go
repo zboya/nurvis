@@ -130,6 +130,28 @@ func Download(ctx context.Context, url, dest string, opts Options) (*Stats, erro
 		return nil, fmt.Errorf("downloader: mkdir parent: %w", err)
 	}
 
+	// Fast path: dest already exists as a regular file. A previous run
+	// either finished cleanly (we always rename .part → dest atomically
+	// and then drop the sidecar) or the caller staged the file there
+	// themselves. Either way, re-probing the origin and re-downloading
+	// would be wasteful and risks clobbering a known-good file when
+	// the network is flaky. Callers that explicitly want to redownload
+	// can delete dest first.
+	if fi, err := os.Stat(dest); err == nil && fi.Mode().IsRegular() {
+		// Surface a 100% progress tick so subscribers don't sit at 0%.
+		emitProgress(opts.Progress, fi.Size(), fi.Size())
+		// Clean up any stale sidecar/part remnants from prior aborted
+		// attempts so the next non-fast-path run starts clean.
+		_ = os.Remove(dest + ".part")
+		_ = os.Remove(dest + ".part.json")
+		return &Stats{
+			URL:      url,
+			Dest:     dest,
+			Total:    fi.Size(),
+			Duration: time.Since(startedAt),
+		}, nil
+	}
+
 	// 1) Probe the origin so we know size + range support + validators.
 	probe, err := probe(ctx, url, opts)
 	if err != nil {
@@ -193,38 +215,63 @@ func Download(ctx context.Context, url, dest string, opts Options) (*Stats, erro
 	emitProgress(opts.Progress, probe.Size, totalDownloaded.Load())
 
 	wg := sync.WaitGroup{}
-	errCh := make(chan error, len(state.Chunks))
-	sem := make(chan struct{}, opts.Concurrency)
+	errCh := make(chan error, opts.Concurrency)
 
+	// Work-stealing scheduler: a fixed pool of opts.Concurrency
+	// workers each pull the next pending chunk index from `jobs`.
+	// This avoids the failure mode of static "one goroutine per
+	// chunk" where a single slow CDN edge blocks an entire worker
+	// slot while other workers sit idle.
+	jobs := make(chan int, len(state.Chunks))
 	for i := range state.Chunks {
-		i := i
+		jobs <- i
+	}
+	close(jobs)
+
+	// Stop signal so workers can exit early once any chunk errors out.
+	stopCtx, stopCancel := context.WithCancel(ctx)
+	defer stopCancel()
+
+	workers := opts.Concurrency
+	if workers > len(state.Chunks) {
+		workers = len(state.Chunks)
+	}
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
+			for {
+				select {
+				case <-stopCtx.Done():
+					return
+				case i, ok := <-jobs:
+					if !ok {
+						return
+					}
+					err := runChunk(stopCtx, url, file, &state.Chunks[i], probe, opts, func(delta int64) {
+						newTotal := totalDownloaded.Add(delta)
+						emitProgress(opts.Progress, probe.Size, newTotal)
 
-			err := runChunk(ctx, url, file, &state.Chunks[i], probe, opts, func(delta int64) {
-				newTotal := totalDownloaded.Add(delta)
-				emitProgress(opts.Progress, probe.Size, newTotal)
-
-				mu.Lock()
-				now := time.Now()
-				if now.Sub(lastFlush) >= opts.SidecarFlushInterval {
+						mu.Lock()
+						now := time.Now()
+						if now.Sub(lastFlush) >= opts.SidecarFlushInterval {
+							_ = writeSidecar(sidecarPath, state)
+							lastFlush = now
+						}
+						mu.Unlock()
+					}, &retries)
+					if err != nil {
+						errCh <- err
+						stopCancel()
+						return
+					}
+					// Always flush on chunk completion so a crash
+					// right after this returns still leaves an
+					// accurate sidecar on disk.
+					mu.Lock()
 					_ = writeSidecar(sidecarPath, state)
-					lastFlush = now
+					mu.Unlock()
 				}
-				mu.Unlock()
-			}, &retries)
-			if err != nil {
-				errCh <- err
-			} else {
-				// Always flush on chunk completion so a crash right
-				// after the goroutine returns still leaves an accurate
-				// sidecar on disk.
-				mu.Lock()
-				_ = writeSidecar(sidecarPath, state)
-				mu.Unlock()
 			}
 		}()
 	}
@@ -275,13 +322,20 @@ func Download(ctx context.Context, url, dest string, opts Options) (*Stats, erro
 
 func applyDefaults(o Options) Options {
 	if o.Concurrency <= 0 {
-		o.Concurrency = 4
+		// 8 parallel TCP streams is a sweet spot on home/mobile links
+		// against HTTP/1.1-forced CDNs (HuggingFace via Cloudfront in
+		// particular). Above ~16 the marginal gain disappears and
+		// servers start rate-limiting per-IP.
+		o.Concurrency = 8
 	}
 	if o.Concurrency > 16 {
 		o.Concurrency = 16
 	}
 	if o.ChunkSize <= 0 {
-		o.ChunkSize = 32 * 1024 * 1024
+		// 8 MiB chunks give the work-stealing scheduler enough
+		// granularity to absorb slow CDN edges without paying too
+		// much per-request HTTP overhead.
+		o.ChunkSize = 8 * 1024 * 1024
 	}
 	if o.MinMultipartSize <= 0 {
 		o.MinMultipartSize = 10 * 1024 * 1024
@@ -302,7 +356,9 @@ func applyDefaults(o Options) Options {
 		o.UserAgent = "nurvis-downloader/1.0"
 	}
 	if o.HTTPClient == nil {
-		o.HTTPClient = http.DefaultClient
+		// Use the package-tuned transport: HTTP/1.1 forced, gzip off,
+		// generous idle pool. See transport.go for rationale.
+		o.HTTPClient = sharedHTTPClient()
 	}
 	if o.SidecarFlushInterval <= 0 {
 		o.SidecarFlushInterval = 1 * time.Second

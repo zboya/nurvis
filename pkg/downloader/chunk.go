@@ -168,7 +168,7 @@ func doChunkOnce(
 	// Stream body → file.WriteAt at rangeStart, updating c.Downloaded
 	// after each successful block so progress + sidecar reflect reality
 	// in near-real-time.
-	buf := make([]byte, 256*1024) // 256 KiB
+	buf := make([]byte, 1<<20) // 1 MiB
 	offset := rangeStart
 	written := int64(0)
 	for {

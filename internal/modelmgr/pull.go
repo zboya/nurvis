@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,17 +18,34 @@ import (
 const (
 	hfBaseURL = "https://huggingface.co"
 
-	// Multipart tuning. These trade off CDN-friendliness against
-	// throughput; values picked to match what curl/aria2 use in
-	// practice. Override via Options if a future caller needs it.
-	dlConcurrency = 4
-	dlChunkSize   = 32 * 1024 * 1024 // 32 MiB per chunk
+	// hfEndpointEnv lets users point Pull at a HuggingFace-compatible
+	// mirror (e.g. https://hf-mirror.com) without recompiling. Useful
+	// in regions where huggingface.co is slow or blocked.
+	hfEndpointEnv = "NURVIS_HF_ENDPOINT"
+
+	// Multipart tuning. Higher concurrency + smaller chunks pair well
+	// with the downloader's work-stealing scheduler and HTTP/1.1-only
+	// transport: each worker opens its own TCP stream, and slow CDN
+	// edges get drained by faster workers stealing the next chunk.
+	dlConcurrency = 8
+	dlChunkSize   = 8 * 1024 * 1024 // 8 MiB per chunk
 	dlMaxRetries  = 6
 
 	// progressMinInterval throttles how often we forward downloader
 	// progress events upstream (gateway throttles further on its own).
 	progressMinInterval = 200 * time.Millisecond
 )
+
+// resolveHFEndpoint returns the configured HuggingFace endpoint,
+// trimmed of trailing slashes. Empty env falls back to the canonical
+// host. Honored at call time so a user changing the env doesn't need
+// to restart Nurvis (the value is read once per Pull).
+func resolveHFEndpoint() string {
+	if v := strings.TrimRight(os.Getenv(hfEndpointEnv), "/"); v != "" {
+		return v
+	}
+	return hfBaseURL
+}
 
 // Pull downloads ref.File from ref.Repo into <Dir>/<repo>/<file>.
 //
@@ -78,7 +96,7 @@ func (m *manager) pullSync(ctx context.Context, ref ModelRef, emit func(PullProg
 	model := ref.String()
 	emit(PullProgress{Model: model, Status: "resolving"})
 
-	url := fmt.Sprintf("%s/%s/resolve/main/%s", hfBaseURL, ref.Repo, ref.File)
+	url := fmt.Sprintf("%s/%s/resolve/main/%s", resolveHFEndpoint(), ref.Repo, ref.File)
 	destDir := filepath.Join(m.dir, filepath.FromSlash(ref.Repo))
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
