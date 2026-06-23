@@ -135,6 +135,21 @@ func (m *Manager) SetMediaRuntime(rt gosd.Runtime, lookup modelMetaLookup, outDi
 	m.MediaOutputDir = outDir
 }
 
+// SetMediaOutputDir updates the media output directory at runtime.
+// Empty string falls back to the default (~/.nurvis/outputs) inside mediaLoop.
+func (m *Manager) SetMediaOutputDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.MediaOutputDir = dir
+}
+
+// GetMediaOutputDir returns the currently configured media output directory.
+func (m *Manager) GetMediaOutputDir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.MediaOutputDir
+}
+
 // Create creates a new Agent.
 func (m *Manager) Create(ctx context.Context, a Agent) (*Agent, error) {
 	if a.Options == nil {
@@ -249,7 +264,7 @@ func (m *Manager) Dispatch(ctx context.Context, req ChatRequest) (sessionID stri
 			// sd shared libs).
 			runner := newMediaLoop(a, sessionID, req,
 				m.sessions, m.messages, m.bus,
-				m.gosdRT, m.MediaOutputDir, m.MediaPreviewURL)
+				m.gosdRT, m.GetMediaOutputDir(), m.MediaPreviewURL)
 			runErr = runner.Run(loopCtx)
 		default:
 			loop := NewLoop(a, sessionID, req, m.sessions, m.messages, m.provider, m.registry, m.ws, m.bus, m.skillMgr)

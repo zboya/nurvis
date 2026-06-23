@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // ── settings ─────────────────────────────────────────────────────────────────
@@ -44,6 +45,12 @@ func (m *Methods) handleSettingsSet(ctx context.Context, _ *Conn, params json.Ra
 	}
 	if err := m.Settings.SetRaw(ctx, p.Key, p.Value); err != nil {
 		return nil, err
+	}
+	// Side-effect: live-update runtime state for known keys.
+	if p.Key == "media_output_dir" && m.Agents != nil {
+		var dir string
+		_ = json.Unmarshal(p.Value, &dir)
+		m.Agents.SetMediaOutputDir(strings.TrimSpace(dir))
 	}
 	return map[string]any{"ok": true}, nil
 }

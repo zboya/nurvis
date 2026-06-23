@@ -10,10 +10,11 @@ import { CronTab } from './CronTab'
 import { McpTab } from './McpTab'
 import { SkillsTab } from './SkillsTab'
 import { CredentialsTab } from './CredentialsTab'
+import { ResourcesTab } from './ResourcesTab'
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-type TabKey = 'appearance' | 'agents' | 'projects' | 'models' | 'channels' | 'cron' | 'mcp' | 'skills' | 'credentials'
+type TabKey = 'appearance' | 'agents' | 'projects' | 'models' | 'channels' | 'cron' | 'mcp' | 'skills' | 'credentials' | 'resources'
 
 const TABS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'appearance', label: '外观', icon: '🎨' },
@@ -25,6 +26,7 @@ const TABS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'mcp',        label: 'MCP',     icon: '🔌' },
   { key: 'skills',     label: 'Skill',   icon: '⚡' },
   { key: 'credentials', label: '凭证', icon: '🔑' },
+  { key: 'resources',   label: '资源', icon: '🖼️' },
 ]
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -43,6 +45,7 @@ export function SettingsPanel() {
     mcp:        <McpTab />,
     skills:     <SkillsTab />,
     credentials: <CredentialsTab />,
+    resources:  <ResourcesTab />,
   }
 
   return (

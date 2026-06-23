@@ -4,12 +4,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -209,6 +211,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	})
 	a.gosdRT = gosdRT
 	mediaOutDir := filepath.Join(cfg.DataDir, "outputs")
+	// Allow user override via settings.media_output_dir
+	settingsRepo := repo.NewSettingsRepo(s.DB())
+	if raw, err := settingsRepo.GetRaw(ctx, "media_output_dir"); err == nil && raw != nil {
+		var custom string
+		if err := json.Unmarshal(raw, &custom); err == nil {
+			custom = strings.TrimSpace(custom)
+			if custom != "" {
+				mediaOutDir = custom
+			}
+		}
+	}
 	agentMgr.SetMediaRuntime(gosdRT, &modelMetaAdapter{repo: modelRepo}, mediaOutDir)
 	agentMgr.MediaPreviewURL = func(p string) (string, error) {
 		dir := filepath.Dir(p)

@@ -130,6 +130,10 @@ func (m *Methods) Register(s *Server) {
 	s.Handle("settings.get", m.handleSettingsGet)
 	s.Handle("settings.set", m.handleSettingsSet)
 
+	// filesystem (resources tab)
+	s.Handle("fs.list_dir", m.handleFsListDir)
+	s.Handle("fs.media_output_dir", m.handleFsMediaOutputDir)
+
 	// site credentials
 	s.Handle("credentials.list", m.handleCredentialsList)
 	s.Handle("credentials.create", m.handleCredentialsCreate)

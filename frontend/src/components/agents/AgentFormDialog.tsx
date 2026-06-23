@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { getWs } from '../../lib/ws'
+import { SelectFiles } from '../../../bindings/github.com/zboya/nurvis/cmd/nurvis-desktop/service'
 import type { Agent, AgentInput } from '../../types'
 import { Button, Input, Textarea } from '../ui'
 import { getToolLabel } from '../../lib/tool-labels'
@@ -21,6 +22,7 @@ interface FormData {
   context_window: number
   tag: 'to-text' | 'to-image' | 'to-video'
   chat_model: string
+  vae_path: string
 }
 
 export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
@@ -87,7 +89,18 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
     }
   })()
 
-  const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
+  // Parse existing vae path from options_json (optional)
+  const initialVaePath = (() => {
+    try {
+      const opts = agent?.options_json ? JSON.parse(agent.options_json) : null
+      const v = opts?.vae
+      return typeof v === 'string' ? v : ''
+    } catch {
+      return ''
+    }
+  })()
+
+  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<FormData>({
     defaultValues: {
       name: agent?.name ?? '',
       model: agent?.model ?? 'gemma4:e4b',
@@ -96,11 +109,33 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
       context_window: initialContextWindow,
       tag: (agent?.tag as 'to-text' | 'to-image' | 'to-video') ?? 'to-text',
       chat_model: agent?.chat_model ?? '',
+      vae_path: initialVaePath,
     },
   })
 
   const watchedTag = watch('tag')
   const isMediaTag = watchedTag === 'to-image' || watchedTag === 'to-video'
+  const watchedModel = watch('model')
+  const watchedChatModel = watch('chat_model')
+
+  // Treat a value as a local file path when it doesn't match any registered
+  // model name. In that case the field is rendered as a free-text Input so
+  // the absolute path is preserved.
+  const isCustomPath = (v: string | undefined) =>
+    !!v && localModels.length > 0 && !localModels.includes(v)
+
+  const pickLocalFile = async (
+    field: 'model' | 'chat_model' | 'vae_path'
+  ) => {
+    try {
+      const files = await SelectFiles()
+      if (files && files.length > 0) {
+        setValue(field, files[0], { shouldDirty: true, shouldValidate: true })
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '选择文件失败')
+    }
+  }
 
   const onValid = async (data: FormData) => {
     setSaving(true)
@@ -112,9 +147,16 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
         existingOptions = agent?.options_json ? JSON.parse(agent.options_json) : {}
       } catch { existingOptions = {} }
       const ctxWin = Number(data.context_window)
-      const mergedOptions = {
+      const mergedOptions: Record<string, unknown> = {
         ...existingOptions,
         context_window: Number.isFinite(ctxWin) && ctxWin > 0 ? Math.floor(ctxWin) : 32768,
+      }
+      const vaeTrimmed = (data.vae_path ?? '').trim()
+      if (isMediaTag && vaeTrimmed) {
+        mergedOptions.vae = vaeTrimmed
+      } else {
+        // Clear stale vae when switching away from media tag or emptied
+        delete mergedOptions.vae
       }
 
       const input: AgentInput & { emoji?: string; options?: Record<string, unknown> } = {
@@ -219,23 +261,30 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
             </label>
             {modelsLoading ? (
               <div className="text-xs text-text-muted py-2">加载模型列表…</div>
-            ) : localModels.length > 0 ? (
-              <select
-                className="w-full bg-surface-tertiary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-                {...register('model', { required: '请选择模型' })}
-              >
-                {localModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
+            ) : localModels.length > 0 && !isCustomPath(watchedModel) ? (
+              <div className="relative">
+                <select
+                  className="w-full bg-surface-tertiary border border-border rounded-lg pl-3 pr-10 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                  {...register('model', { required: '请选择模型' })}
+                >
+                  {localModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <FolderPickButton onClick={() => pickLocalFile('model')} />
+              </div>
             ) : (
-              <Input
-                placeholder="gemma4:e4b"
-                {...register('model', { required: '请填写模型' })}
-                error={errors.model?.message}
-              />
+              <div className="relative">
+                <Input
+                  className="pr-10"
+                  placeholder="gemma4:e4b 或 /absolute/path/to/model.gguf"
+                  {...register('model', { required: '请填写模型' })}
+                  error={errors.model?.message}
+                />
+                <FolderPickButton onClick={() => pickLocalFile('model')} />
+              </div>
             )}
-            {errors.model?.message && localModels.length > 0 && (
+            {errors.model?.message && localModels.length > 0 && !isCustomPath(watchedModel) && (
               <p className="text-xs text-error">{errors.model.message}</p>
             )}
           </div>
@@ -247,28 +296,54 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
               </label>
               {modelsLoading ? (
                 <div className="text-xs text-text-muted py-2">加载模型列表…</div>
-              ) : localModels.length > 0 ? (
-                <select
-                  className="w-full bg-surface-tertiary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-                  {...register('chat_model', { required: isMediaTag ? '请选择对话模型' : false })}
-                >
-                  <option value="">请选择…</option>
-                  {localModels.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+              ) : localModels.length > 0 && !isCustomPath(watchedChatModel) ? (
+                <div className="relative">
+                  <select
+                    className="w-full bg-surface-tertiary border border-border rounded-lg pl-3 pr-10 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                    {...register('chat_model', { required: isMediaTag ? '请选择对话模型' : false })}
+                  >
+                    <option value="">请选择…</option>
+                    {localModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                  <FolderPickButton onClick={() => pickLocalFile('chat_model')} />
+                </div>
               ) : (
-                <Input
-                  placeholder="gemma4:e4b"
-                  {...register('chat_model', { required: isMediaTag ? '请填写对话模型' : false })}
-                  error={errors.chat_model?.message}
-                />
+                <div className="relative">
+                  <Input
+                    className="pr-10"
+                    placeholder="gemma4:e4b 或 /absolute/path/to/model.gguf"
+                    {...register('chat_model', { required: isMediaTag ? '请填写对话模型' : false })}
+                    error={errors.chat_model?.message}
+                  />
+                  <FolderPickButton onClick={() => pickLocalFile('chat_model')} />
+                </div>
               )}
               {errors.chat_model?.message && (
                 <p className="text-xs text-error">{errors.chat_model.message}</p>
               )}
               <p className="text-xs text-text-muted">
                 负责与用户对话、润色 prompt、说明生成结果；不会用于实际的图片/视频推理。
+              </p>
+            </div>
+          )}
+
+          {isMediaTag && (
+            <div className="space-y-1">
+              <label className="block text-xs font-medium text-text-secondary">
+                VAE 文件路径（可选）
+              </label>
+              <div className="relative">
+                <Input
+                  className="pr-10"
+                  placeholder="/absolute/path/to/vae.safetensors"
+                  {...register('vae_path')}
+                />
+                <FolderPickButton onClick={() => pickLocalFile('vae_path')} />
+              </div>
+              <p className="text-xs text-text-muted">
+                为扩散模型指定外置 VAE 文件；留空则使用模型自带 VAE。
               </p>
             </div>
           )}
@@ -377,5 +452,28 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
         </form>
       </div>
     </div>
+  )
+}
+
+// FolderPickButton renders a small folder icon button absolutely positioned
+// inside the right edge of a relative-positioned input/select container.
+// The parent must be `position: relative` and the input/select must reserve
+// padding on the right (pr-10) so text never slides under the icon.
+function FolderPickButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="选择本地文件"
+      className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-secondary transition-colors"
+    >
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.4.6L11.4 7H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"
+        />
+      </svg>
+    </button>
   )
 }
