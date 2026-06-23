@@ -92,9 +92,21 @@ func newEngine(binPath, host string, port int, cfg ModelConfig) (*engineImpl, er
 	if cfg.KeepClipOnCPU {
 		args = append(args, "--clip-on-cpu")
 	}
-	if cfg.DiffusionFlashAttn {
-		args = append(args, "--diffusion-fa")
-	}
+
+	// Default runtime flags applied to every sd-server invocation.
+	//   --diffusion-fa     enable flash-attention in the diffusion backbone (faster, lower VRAM)
+	//   --offload-to-cpu   offload idle weights to CPU RAM to keep VRAM footprint small
+	//   -v                 verbose logging (useful for debugging model loading)
+	//   --cfg-scale 1.0    safe default; per-request override still wins via the
+	//                      <sd_cpp_extra_args> prompt extension.
+	// cfg.DiffusionFlashAttn is kept for backwards compatibility but no longer
+	// needed since --diffusion-fa is always on.
+	args = append(args,
+		"--diffusion-fa",
+		"--offload-to-cpu",
+		"-v",
+		"--cfg-scale", "1.0",
+	)
 
 	cmd := exec.Command(binPath, args...)
 	cmd.Stdout = os.Stderr // sd-server logs to stdout; mirror to our stderr for visibility

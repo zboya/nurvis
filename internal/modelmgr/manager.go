@@ -202,6 +202,13 @@ func (m *manager) List(ctx context.Context) ([]ModelInfo, error) {
 }
 
 func (m *manager) Resolve(name string) (string, error) {
+	// Tilde expansion: shell-style "~/..." paths don't get expanded by Go's
+	// os.Stat or by C++ child processes (sd-server, llama-server) downstream,
+	// so normalise them up front. Users routinely paste "~/.cache/..." style
+	// paths into the agent form.
+	if expanded := expandUserPath(name); expanded != name {
+		name = expanded
+	}
 	// Fast path: if the caller already passed an absolute path that exists
 	// on disk, return it as-is. This lets users point to GGUF / safetensors
 	// files outside the managed models dir (e.g. via the agent form's
@@ -274,3 +281,26 @@ func (m *manager) Delete(ctx context.Context, name string) error {
 
 // errStopWalk is a sentinel used to short-circuit filepath.Walk.
 var errStopWalk = errors.New("modelmgr: stop walk")
+
+// expandUserPath rewrites a leading "~" or "~/..." segment into the current
+// user's home directory. C++ children (sd-server, llama-server) don't do
+// shell-style tilde expansion, so any "~"-prefixed user path would otherwise
+// fail downstream with "file not found". Non-tilde paths and empty strings
+// are returned unchanged.
+func expandUserPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p[0] != '~' {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:])
+	}
+	return p
+}

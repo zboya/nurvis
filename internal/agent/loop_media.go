@@ -261,14 +261,14 @@ func (l *mediaLoop) persistAssistantMessage(ctx context.Context, prompt string, 
 func (l *mediaLoop) resolveModelConfig() (gosd.ModelConfig, error) {
 	opts := l.agent.Options
 	cfg := gosd.ModelConfig{
-		LegacyModelPath:    optString(opts, "model_path"),
-		DiffusionModelPath: optString(opts, "diffusion_model"),
-		HighNoiseModelPath: optString(opts, "high_noise"),
-		VAEPath:            optString(opts, "vae"),
-		TextEncoderPath:    l.agent.ChatModel,
-		ClipLPath:          optString(opts, "clip_l"),
-		ClipGPath:          optString(opts, "clip_g"),
-		LoraModelDir:       optString(opts, "lora_dir"),
+		LegacyModelPath:    expandUserPath(optString(opts, "model_path")),
+		DiffusionModelPath: expandUserPath(optString(opts, "diffusion_model")),
+		HighNoiseModelPath: expandUserPath(optString(opts, "high_noise")),
+		VAEPath:            expandUserPath(optString(opts, "vae")),
+		TextEncoderPath:    expandUserPath(l.agent.ChatModel),
+		ClipLPath:          expandUserPath(optString(opts, "clip_l")),
+		ClipGPath:          expandUserPath(optString(opts, "clip_g")),
+		LoraModelDir:       expandUserPath(optString(opts, "lora_dir")),
 		KeepClipOnCPU:      optBool(opts, "keep_clip_on_cpu"),
 		DiffusionFlashAttn: optBool(opts, "flash_attn"),
 	}
@@ -329,6 +329,30 @@ func captionFor(m MediaArtifact) string {
 }
 
 // --- helpers (Options dictionary access) -----------------------------------
+
+// expandUserPath rewrites a leading "~" or "~/..." segment into the current
+// user's home directory. C++ children (sd-server, llama-server) don't do
+// shell-style tilde expansion, so any user-supplied path written as "~/..."
+// would otherwise reach them verbatim and fail with "file not found".
+// Non-tilde paths and empty strings are returned unchanged.
+func expandUserPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p[0] != '~' {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	if strings.HasPrefix(p, "~/") {
+		return filepath.Join(home, p[2:])
+	}
+	// "~user/..." form: not supported, return as-is.
+	return p
+}
 
 func optString(m map[string]any, key string) string {
 	if m == nil {
