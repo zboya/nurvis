@@ -407,7 +407,9 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
             </p>
           </div>
 
-          {/* Tool allowlist */}
+          {/* Tool allowlist — hidden for media tags (to-image / to-video),
+              which do not invoke tools during generation. */}
+          {!isMediaTag && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="block text-xs font-medium text-text-secondary">
@@ -461,6 +463,7 @@ export function AgentFormDialog({ agent, onSave, onCancel }: Props) {
               不勾选任何工具时，助手可使用所有已启用的工具。
             </p>
           </div>
+          )}
 
           {error && <p className="text-xs text-error">{error}</p>}
 
