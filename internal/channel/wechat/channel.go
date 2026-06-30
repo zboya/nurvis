@@ -124,22 +124,25 @@ func (c *Channel) handleCallback(w http.ResponseWriter, r *http.Request) {
 // Send sends messages through the WeChat gateway HTTP API.
 func (c *Channel) Send(ctx context.Context, out channel.Outbound) error {
 	if c.cfg.GewechatURL == "" {
-		slog.Warn("wechat: no gateway URL configured, drop outbound message")
-		return nil
+		return fmt.Errorf("wechat: no gateway URL configured")
 	}
 
 	// TODO: Implement sending according to the specific gateway API format
 	// Example placeholder: POST /sendText
 	slog.Info("wechat: [TODO] send message", "to", out.To.ID, "text_len", len(out.Text))
-	return nil
+	return fmt.Errorf("wechat: send not implemented yet")
 }
 
 // Stop stops the WeChat Channel.
 func (c *Channel) Stop() error {
-	if c.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return c.server.Shutdown(ctx)
+	c.mu.Lock()
+	srv := c.server
+	c.server = nil
+	c.mu.Unlock()
+	if srv == nil {
+		return nil
 	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(ctx)
 }

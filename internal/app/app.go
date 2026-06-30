@@ -21,7 +21,10 @@ import (
 	"github.com/zboya/nurvis/internal/bus"
 	"github.com/zboya/nurvis/internal/channel"
 	channeldispatcher "github.com/zboya/nurvis/internal/channel"
+	"github.com/zboya/nurvis/internal/channel/dingtalk"
 	"github.com/zboya/nurvis/internal/channel/qq"
+	"github.com/zboya/nurvis/internal/channel/wechat"
+	"github.com/zboya/nurvis/internal/channel/wework"
 	"github.com/zboya/nurvis/internal/gateway"
 	"github.com/zboya/nurvis/internal/hardware"
 	"github.com/zboya/nurvis/internal/mcp"
@@ -395,8 +398,32 @@ func loadChannels(ctx context.Context, s *store.Store, disp *channel.Dispatcher)
 			disp.Register(ch)
 			slog.Info("app: registered qq channel", "channel_id", e.ID)
 		case "wechat":
-			slog.Info("app: wechat channel skipped (not yet implemented)",
-				"channel_id", e.ID)
+			ch, err := wechat.New(e.ID, e.ConfigJSON)
+			if err != nil {
+				slog.Warn("app: skip wechat channel (config invalid)",
+					"channel_id", e.ID, "err", err)
+				continue
+			}
+			disp.Register(ch)
+			slog.Info("app: registered wechat channel", "channel_id", e.ID)
+		case "wework":
+			ch, err := wework.New(e.ID, e.ConfigJSON)
+			if err != nil {
+				slog.Warn("app: skip wework channel (config invalid)",
+					"channel_id", e.ID, "err", err)
+				continue
+			}
+			disp.Register(ch)
+			slog.Info("app: registered wework channel", "channel_id", e.ID)
+		case "dingtalk":
+			ch, err := dingtalk.New(e.ID, e.ConfigJSON)
+			if err != nil {
+				slog.Warn("app: skip dingtalk channel (config invalid)",
+					"channel_id", e.ID, "err", err)
+				continue
+			}
+			disp.Register(ch)
+			slog.Info("app: registered dingtalk channel", "channel_id", e.ID)
 		default:
 			slog.Warn("app: unknown channel type", "type", e.Type, "channel_id", e.ID)
 		}

@@ -67,12 +67,30 @@ export interface CronRun {
   finished_at?: string
 }
 
-export type ChannelType = 'qq' | 'wechat'
+export type ChannelType = 'qq' | 'wechat' | 'wework' | 'dingtalk'
 
 export interface QQConfig {
   app_id: string
   app_secret: string
   sandbox?: boolean
+}
+
+export interface WeWorkConfig {
+  corp_id: string
+  corp_secret: string
+  agent_id: number
+  callback_port?: number
+  callback_path?: string
+}
+
+export interface DingTalkConfig {
+  webhook_url?: string
+  secret?: string
+  app_key?: string
+  app_secret?: string
+  robot_code?: string
+  callback_port?: number
+  callback_path?: string
 }
 
 export interface LibraryModel {

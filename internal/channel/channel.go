@@ -40,6 +40,14 @@ const (
 	MediaKindFile  = "file"
 )
 
+// Channel type identifiers (must match channels.type in DB and frontend selector).
+const (
+	TypeQQ       = "qq"
+	TypeWeChat   = "wechat"
+	TypeWeWork   = "wework"
+	TypeDingTalk = "dingtalk"
+)
+
 // Inbound is a message received from a Channel.
 type Inbound struct {
 	ChannelID string     `json:"channel_id"`

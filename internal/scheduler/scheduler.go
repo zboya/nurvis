@@ -46,6 +46,11 @@ type Scheduler struct {
 	cron       *cron.Cron
 	mu         sync.Mutex
 	entryMap   map[string]cron.EntryID // jobID → cron.EntryID
+
+	// rootCtx is captured from Start(ctx) and used as parent for fire().
+	// When the embedding application cancels this ctx, in-flight cron-triggered
+	// dispatches receive cancellation as well.
+	rootCtx context.Context
 }
 
 // New creates a new Scheduler.
@@ -57,11 +62,15 @@ func New(db *sql.DB, b bus.Bus, d Dispatcher) *Scheduler {
 		dispatcher: d,
 		cron:       c,
 		entryMap:   make(map[string]cron.EntryID),
+		rootCtx:    context.Background(),
 	}
 }
 
 // Start loads jobs from DB and starts the cron engine.
 func (s *Scheduler) Start(ctx context.Context) error {
+	if ctx != nil {
+		s.rootCtx = ctx
+	}
 	jobs, err := s.listJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("scheduler: load jobs: %w", err)
@@ -92,6 +101,9 @@ func (s *Scheduler) AddJob(ctx context.Context, j Job) (*Job, error) {
 		return nil, fmt.Errorf("scheduler: insert job: %w", err)
 	}
 	if err := s.addEntry(*created); err != nil {
+		// Roll back DB write so an invalid spec does not leave a dangling row
+		// that will fail again on next startup.
+		_ = s.repo.DeleteJob(ctx, created.ID)
 		return nil, err
 	}
 	return created, nil
@@ -119,15 +131,24 @@ func (s *Scheduler) ToggleJob(ctx context.Context, id string, enabled bool) erro
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if enabled {
-		if _, ok := s.entryMap[id]; !ok {
-			_ = s.addEntry(*j)
-		}
-	} else {
-		if entryID, ok := s.entryMap[id]; ok {
+	_, hasEntry := s.entryMap[id]
+	if !enabled {
+		if hasEntry {
+			entryID := s.entryMap[id]
 			s.cron.Remove(entryID)
 			delete(s.entryMap, id)
+		}
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	// addEntry takes s.mu itself, so call it without holding the lock to avoid
+	// a self-deadlock.
+	if !hasEntry {
+		if err := s.addEntry(*j); err != nil {
+			// Roll back the enabled flag so DB and cron engine stay in sync.
+			_ = s.repo.SetEnabled(ctx, id, false)
+			return err
 		}
 	}
 	return nil
@@ -169,7 +190,10 @@ func (s *Scheduler) addEntry(j Job) error {
 }
 
 func (s *Scheduler) fire(j *Job) {
-	ctx := context.Background()
+	ctx := s.rootCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	runID := uuid.New().String()
 	startedAt := time.Now()
 
